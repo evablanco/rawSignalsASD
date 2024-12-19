@@ -34,11 +34,11 @@ if __name__ == '__main__':
     #########
     model_version = args.modelversion
     # Model 0: generate samples with the entire past complete window, extract features and concatenate with
-    # variable indicating if there was an aggressive behavior in the window itself.
+    # variable indicating if there was an aggressive behavior in the previous window.
     # Model 1: Generate samples in 15 second bins, group into N sequences based on tp, extract features per bin and
     # concatenate with t-1 label.
     # Model 2: Generate samples in 15 second bins, group into N sequences based on tp, extract features per bin and
-    # concatenate with variable indicating if there was an aggressive behavior in the bin itself.
+    # concatenate with variable indicating if there was an aggressive behavior in the previous bin.
     ##########
 
     #########
