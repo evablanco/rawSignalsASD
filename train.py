@@ -182,7 +182,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
     #data_dict = dict(list(data_dict.items())[:1])
     EEG_channels = 5
     model_fun, features_fun, dataloader_fun, split_fun = set_model(model_code)
-    num_exps = 1 # TO-DO: configurar particones para cada exp!
+    num_exps = 10 # TO-DO: configurar particones para cada exp!
     tp, tf, stride, bin_size = tp, tf, 15, 15
     print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
     final_results = []
