@@ -268,7 +268,7 @@ class AggressiveBehaviorDatasetBinAGGobserved(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        return self.data[idx], self.prev_labels[idx], self.labels[idx]
+        return self.data[idx], self.aggObs[idx], self.labels[idx]
 
 
 class AggressiveBehaviorDatasetwinLabels(Dataset):

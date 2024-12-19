@@ -173,7 +173,7 @@ def create_dataloader(dataloader_fun, output_dict, tp, bin_size, batch_size, shu
     return dataloader
 
 
-def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, seed=1):
+def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, only_features, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -182,7 +182,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
     #data_dict = dict(list(data_dict.items())[:1])
     EEG_channels = 5
     model_fun, features_fun, dataloader_fun, split_fun = set_model(model_code)
-    num_exps = 10 # TO-DO: configurar particones para cada exp!
+    num_exps = 1 # TO-DO: configurar particones para cada exp!
     tp, tf, stride, bin_size = tp, tf, 15, 15
     print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
     final_results = []
@@ -230,15 +230,15 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         }
         lstm_hidden_dim = 64
         num_classes = 1
-        model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
+        model = model_fun(eegnet_params, lstm_hidden_dim, only_features, num_classes).to(device)
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
         optimizer = Adam(model.parameters(), lr=0.001)
-        num_epochs = 1
+        num_epochs = 100
 
         best_num_epochs = train_model(model, dataloader, dataloader_val, criterion,
                                       optimizer, num_epochs, device)
 
-        final_model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
+        final_model = model_fun(eegnet_params, lstm_hidden_dim, only_features, num_classes).to(device)
         dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, bin_size, batch_size, shuffle=True)
 
         labels_list = []
@@ -277,12 +277,12 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         'Num_epochs': [avg_metrics['Num_epochs'], std_metrics['Num_epochs']]
     })
     final_results_df = pd.concat([results_df, summary_df], ignore_index=True)
-    path_to_save_results = f'{path_results}PM_SS_model{model_code}_tf{tf}_tp{tp}_all_experiments_results.csv'
+    path_to_save_results = f'{path_results}PM_SS_model{model_code}_onlyFeats{only_features}_tf{tf}_tp{tp}_all_experiments_results.csv'
     final_results_df.to_csv(path_to_save_results, index=False)
     print("Results saved successfully.")
 
 
-def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, seed=1):
+def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, only_features, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -347,7 +347,7 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
             }
             lstm_hidden_dim = 64
             num_classes = 1
-            model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
+            model = model_fun(eegnet_params, lstm_hidden_dim, only_features, num_classes).to(device)
             criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
             optimizer = Adam(model.parameters(), lr=0.001)
             num_epochs = 1
@@ -355,7 +355,7 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
             best_num_epochs = train_model(model, dataloader, dataloader_val, criterion,
                                           optimizer, num_epochs, device)
 
-            final_model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
+            final_model = model_fun(eegnet_params, lstm_hidden_dim, only_features, num_classes).to(device)
             dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, bin_size, batch_size, shuffle=True)
 
             labels_list = []
@@ -395,6 +395,6 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
         'Num_epochs': [avg_metrics['Num_epochs'], std_metrics['Num_epochs']]
     })
     final_results_df = pd.concat([results_df, summary_df], ignore_index=True)
-    path_to_save_results = f'{path_results}PDM_SS_model{model_code}_tf{tf}_tp{tp}_all_experiments_results.csv'
+    path_to_save_results = f'{path_results}PDM_SS_model{model_code}_onlyFeats{only_features}_tf{tf}_tp{tp}_all_experiments_results.csv'
     final_results_df.to_csv(path_to_save_results, index=False)
     print("Results saved successfully.")
