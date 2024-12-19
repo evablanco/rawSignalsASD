@@ -162,6 +162,49 @@ def get_features_from_dic_aggBehavior_wins(data_dict, tp=60, tf=180, stride=15, 
     return output_dict
 
 
+def get_features_from_dic_aggBehavior_wins_fixed(data_dict, tp=60, tf=180, stride=15, freq=32):
+    win_size = tp * freq
+    label_size = tf * freq
+    stride_size = stride * freq
+    output_dict = {}
+    for main_key, sub_dict in data_dict.items():
+        if main_key not in output_dict:
+            output_dict[main_key] = {}
+        for sub_key, df in sub_dict.items():
+            if sub_key not in output_dict[main_key]:
+                output_dict[main_key][sub_key] = {}
+            df_subject = data_dict[main_key][sub_key]
+            #print(f"key: {main_key}-{sub_key}, num. values in session: {len(df_subject)}")
+            counter = 0
+            windows_list = []
+            labels_list = []
+            final_labels_list = []
+            agg_observed_list = [] # si en el la ventana hubo un episodio agresivo, se concatena con la siguiente ventana
+            next_limit = (counter * stride_size) + win_size + label_size
+            while (next_limit < len(df_subject)):
+                init_win_f = (counter * stride_size)
+                end_win_f = init_win_f + win_size
+                init_win_l = end_win_f
+                end_win_l = init_win_l + label_size
+                window_data = df_subject.iloc[init_win_f:end_win_f]
+                agg_observed = window_data.Condition.max()
+                agg_observed_list.append(agg_observed)
+                win_features = window_data.drop(columns=['Condition'])
+                windows_list.append(win_features)
+                labels_list.append(df_subject.iloc[init_win_l:end_win_l])
+                labels_df = df_subject.iloc[init_win_l:end_win_l]['Condition'].max()
+                final_labels_list.append(labels_df)
+                counter += 1
+                next_limit = (counter * stride_size) + win_size + label_size
+                #print(f"Window: {counter}, added win_f: [{init_win_f}, {end_win_f}], win_l: [{init_win_l}, {end_win_l}]")
+            #print(f"Total windows: {len(windows_list)}, num_labels: {len(final_labels_list)}")
+            #print('')
+            output_dict[main_key][sub_key] = {'features': windows_list, 'labels': final_labels_list, 'aggObserved': agg_observed_list}
+
+    #print('done...')
+    return output_dict
+
+
 def split_data_per_session_aggObserved(data_dict, train_ratio=0.8):
     train_dict = {}
     test_dict = {}

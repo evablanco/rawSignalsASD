@@ -159,10 +159,15 @@ def set_model(model_code):
         features_fun = data_utils.get_features_from_dic_prevLabels_bins
         dataloader_fun = data_utils.AggressiveBehaviorDatasetBinLabels
         split_fun = data_utils.split_data_per_session_prevLabel
-    else: # model_code == 2, still on going
+    elif model_code == 2:
         model_fun = models.EEGNetLSTM_v1
         features_fun = data_utils.get_features_from_dic_aggObserved_bins
         dataloader_fun = data_utils.AggressiveBehaviorDatasetBinAGGobserved
+        split_fun = data_utils.split_data_per_session_aggObserved
+    else: # model_code == 3, still on going
+        model_fun = models.EEGNetLSTMwinLabels
+        features_fun = data_utils.get_features_from_dic_aggBehavior_wins_fixed
+        dataloader_fun = data_utils.AggressiveBehaviorDatasetwinLabels
         split_fun = data_utils.split_data_per_session_aggObserved
     return model_fun, features_fun, dataloader_fun, split_fun
 
