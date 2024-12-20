@@ -95,7 +95,7 @@ def get_features_from_dic_aggObserved_bins(data_dict, tp=60, tf=180, bin_size=15
             labels_list = []
             agg_observed_list = []
             # Calculate the endpoint of the next prediction window
-            next_limit = counter * win_size
+            next_limit = counter * win_size + win_size
             # Loop to extract bins until the end of the session
             while (next_limit < len(df_subject)):
                 init_win_f = (counter * win_size)  # Start of the current observation bin
@@ -111,7 +111,7 @@ def get_features_from_dic_aggObserved_bins(data_dict, tp=60, tf=180, bin_size=15
                 windows_list.append(win_features)
                 # Increment the bin counter and update the endpoint of the next prediction window
                 counter += 1
-                next_limit = counter * win_size
+                next_limit = counter * win_size + win_size
                 #print(f"Window: {counter}, added win_f: [{init_win_f}, {end_win_f}], win_l: [{init_win_l}, {end_win_l}]")
             #print(f"Total windows: {len(windows_list)}, num_labels: {len(labels_list)}")
             #print('')
@@ -229,6 +229,24 @@ def split_data_per_session_aggObserved(data_dict, train_ratio=0.8):
             test_dict[user][session] = {'features': test_features, 'labels': test_labels}
     return train_dict, test_dict
 
+def split_data_per_session(data_dict, train_ratio=0.8):
+    train_dict = {}
+    test_dict = {}
+    for user, sessions in data_dict.items():
+        train_dict[user] = {}
+        test_dict[user] = {}
+        for session, data in sessions.items():
+            features = data['features']
+            labels = data['labels']
+            split_idx = int(len(features) * train_ratio)
+            train_features = features[:split_idx]
+            train_labels = labels[:split_idx]
+            test_features = features[split_idx:]
+            test_labels = labels[split_idx:]
+            train_dict[user][session] = {'features': train_features, 'labels': train_labels}
+            test_dict[user][session] = {'features': test_features, 'labels': test_labels}
+    return train_dict, test_dict
+
 
 def split_data_per_session_prevLabel(data_dict, train_ratio=0.8):
     train_dict = {}
@@ -285,7 +303,7 @@ class AggressiveBehaviorDatasetBinLabels(Dataset):
         return self.data[idx], self.prev_labels[idx], self.labels[idx]
 
 
-class AggressiveBehaviorDatasetBinAGGobserved(Dataset):
+class AggressiveBehaviorDatasetBin(Dataset):
     def __init__(self, data_dict, tp=15, bin_size=15):
         self.data = []
         self.labels = []

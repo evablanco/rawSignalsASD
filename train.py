@@ -15,11 +15,10 @@ def evaluate_val_auc_model(model, test_dataloader, device):
     all_probs = []  # AUC-ROC
     all_labels = []
     with torch.no_grad():
-        for batch_features, batch_aggObs, batch_labels in test_dataloader:
+        for batch_features, batch_labels in test_dataloader:
             batch_features = batch_features.to(device)
-            batch_aggObs = batch_aggObs.to(device)
             batch_labels = batch_labels.to(device)
-            logits = model(batch_features, batch_aggObs)
+            logits = model(batch_features)
             probs = torch.sigmoid(logits).squeeze()
             all_probs.extend(probs.cpu().numpy())
             all_labels.extend(batch_labels.cpu().numpy())
@@ -31,11 +30,10 @@ def evaluate_model(model, test_dataloader, device):
     all_probs = []  # AUC-ROC
     all_labels = []
     with torch.no_grad():
-        for batch_features, batch_aggObs, batch_labels in test_dataloader:
+        for batch_features, batch_labels in test_dataloader:
             batch_features = batch_features.to(device)
-            batch_aggObs = batch_aggObs.to(device)
             batch_labels = batch_labels.to(device)
-            logits = model(batch_features, batch_aggObs)
+            logits = model(batch_features)
             probs = torch.sigmoid(logits).squeeze()
             all_probs.extend(probs.cpu().numpy())
             all_labels.extend(batch_labels.cpu().numpy())
@@ -71,12 +69,11 @@ def train_model(model, train_dataloader, val_dataloader, criterion, optimizer, n
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
-        for batch_features, batch_AGGObs, batch_labels in train_dataloader:
+        for batch_features, batch_labels in train_dataloader:
             batch_features = batch_features.to(device)
-            batch_AGGObs = batch_AGGObs.to(device).float()
             batch_labels = batch_labels.to(device).float()
             optimizer.zero_grad()
-            predictions = model(batch_features, batch_AGGObs).squeeze()  # Remover dimensión extra si es necesario
+            predictions = model(batch_features)
             loss = criterion(predictions, batch_labels)
             loss.backward()
             optimizer.step()
@@ -86,7 +83,6 @@ def train_model(model, train_dataloader, val_dataloader, criterion, optimizer, n
         train_losses.append(total_loss / len(train_dataloader))
         if auc_val > best_auc:
             best_auc = auc_val
-            # torch.save(model.state_dict(), path_to_save_model)
             counter_patience = 0
         else:
             print('Val auc does not improve...')
@@ -105,7 +101,7 @@ def train_model(model, train_dataloader, val_dataloader, criterion, optimizer, n
 
 def invalid_data(dataloader):
     labels_list = []
-    for _, _, labels in dataloader:
+    for _, labels in dataloader:
         labels_flat = labels.numpy().flatten()
         labels_list.extend(labels_flat)
     labels_array = np.array(labels_list)
@@ -119,12 +115,11 @@ def retrain_model(model, train_dataloader, test_dataloader, criterion, optimizer
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
-        for batch_features, batch_AGGObs, batch_labels in train_dataloader:
+        for batch_features, batch_labels in train_dataloader:
             batch_features = batch_features.to(device)
-            batch_AGGObs = batch_AGGObs.to(device).float()
             batch_labels = batch_labels.to(device).float()
             optimizer.zero_grad()
-            predictions = model(batch_features, batch_AGGObs).squeeze()  # Remover dimensión extra si es necesario
+            predictions = model(batch_features)
             loss = criterion(predictions, batch_labels)
             loss.backward()
             optimizer.step()
@@ -150,31 +145,19 @@ def retrain_model(model, train_dataloader, test_dataloader, criterion, optimizer
 
 def set_model(model_code):
     if model_code == 0:
-        model_fun = models.EEGNetLSTMwinLabels
-        features_fun = data_utils.get_features_from_dic_aggBehavior_wins
-        dataloader_fun = data_utils.AggressiveBehaviorDatasetwinLabels
-        split_fun = data_utils.split_data_per_session_aggObserved
-    elif model_code == 1:
-        model_fun = models.EEGNetLSTM_v1
-        features_fun = data_utils.get_features_from_dic_prevLabels_bins
-        dataloader_fun = data_utils.AggressiveBehaviorDatasetBinLabels
-        split_fun = data_utils.split_data_per_session_prevLabel
-    elif model_code == 2:
-        model_fun = models.EEGNetLSTM_v1
+        model_fun = models.EEGNetLSTM
         features_fun = data_utils.get_features_from_dic_aggObserved_bins
-        dataloader_fun = data_utils.AggressiveBehaviorDatasetBinAGGobserved
-        split_fun = data_utils.split_data_per_session_aggObserved
-    else: # model_code == 3, still on going
-        model_fun = models.EEGNetLSTMwinLabels
-        features_fun = data_utils.get_features_from_dic_aggBehavior_wins_fixed
-        dataloader_fun = data_utils.AggressiveBehaviorDatasetwinLabels
-        split_fun = data_utils.split_data_per_session_aggObserved
+        dataloader_fun = data_utils.AggressiveBehaviorDatasetBin
+        split_fun = data_utils.split_data_per_session
+    else:
+        print('Not supported yet.')
+        model_fun, features_fun, dataloader_fun, split_fun = None, None, None, None
     return model_fun, features_fun, dataloader_fun, split_fun
 
 
 def create_dataloader(dataloader_fun, output_dict, tp, bin_size, batch_size, shuffle=False):
     dataset = dataloader_fun(output_dict, tp, bin_size)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=True)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=False)
     return dataloader
 
 
@@ -202,14 +185,14 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         dataloader_val = create_dataloader(dataloader_fun, val_dict, tp, bin_size, batch_size, shuffle=False)
         dataloader_test = create_dataloader(dataloader_fun, test_dict, tp, bin_size, batch_size, shuffle=False)
 
-        for batch_features, batch_AGGObs, batch_labels in dataloader:
+        for batch_features, batch_labels in dataloader:
             print(f"Features: {batch_features.shape}")
             print(f"Labels: {batch_labels.shape}")
             break
 
         # compute class weights
         labels_list = []
-        for _, _, labels in dataloader:
+        for _, labels in dataloader:
             labels_flat = labels.numpy().flatten()
             labels_list.extend(labels_flat)
         labels_array = np.array(labels_list)
@@ -250,7 +233,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, bin_size, batch_size, shuffle=True)
 
         labels_list = []
-        for _, _, labels in dataloader_final:
+        for _, labels in dataloader_final:
             labels_flat = labels.numpy().flatten()
             labels_list.extend(labels_flat)
         labels_array = np.array(labels_list)
@@ -267,7 +250,6 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         pos_weight_tensor = torch.tensor([positive_class_weight]).to(device)
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
         optimizer = Adam(final_model.parameters(), lr=0.001)
-        exp_name = 'tp_' + str(tp) + '_tf' + str(tf)
         path_model = path_models + 'tf' + str(tf) + '_tp' + str(tp) +  '_exp_' + str(exp) + '_model.pth'
         results = retrain_model(final_model, dataloader_final, dataloader_test, criterion, optimizer, best_num_epochs,
                                 device, exp, path_model)
