@@ -184,7 +184,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
     data_dict = data_utils.load_data_to_dict(ds_path)
-    #data_dict = dict(list(data_dict.items())[:1])
+    data_dict = dict(list(data_dict.items())[:1])
     EEG_channels = 5
     model_fun, features_fun, dataloader_fun, split_fun = set_model(model_code)
     num_exps = 10 # TO-DO: configurar particones para cada exp!
@@ -227,6 +227,9 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
 
         # create model
         num_sequences = tp // bin_size  # tp//bin_size en EEGNetLSTMwinLabelsSeqs_binS
+
+        if model_code == 0 or model_code == 3:
+            num_sequences = 1
 
         bin_size = 15
         eegnet_params = {
@@ -293,7 +296,7 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
     data_dict = data_utils.load_data_to_dict(ds_path)
-    data_dict = dict(list(data_dict.items())[:2])
+    #data_dict = dict(list(data_dict.items())[:2])
     EEG_channels = 5
     model_fun, features_fun, dataloader_fun, split_fun = set_model(model_code)
     num_exps = 10 # TO-DO: configurar particones para cada exp!
@@ -344,7 +347,8 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
 
             # create model
             num_sequences = tp // bin_size  # tp//bin_size en EEGNetLSTMwinLabelsSeqs_binS
-
+            if model_code == 0 or model_code == 3:
+                num_sequences = 1
             bin_size = 15
             eegnet_params = {
                 'num_electrodes': EEG_channels,  # (EDA, ACC_X, ACC_Y, ACC_Z, BVP) | (EDA, ACC_Norm, BVP) | ....
@@ -355,7 +359,7 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
             model = model_fun(eegnet_params, lstm_hidden_dim, only_features, num_classes).to(device)
             criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
             optimizer = Adam(model.parameters(), lr=0.001)
-            num_epochs = 1
+            num_epochs = 100
 
             best_num_epochs = train_model(model, dataloader, dataloader_val, criterion,
                                           optimizer, num_epochs, device)

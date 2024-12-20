@@ -56,7 +56,7 @@ def plot_resampled_comparison(original_data, resampled_data, subject_id, session
                    linestyle=line_style, alpha=line_alpha)
     axs[0, 0].set_ylabel('EDA')
     axs[0, 0].legend([styles['EDA']['label']])
-    axs[0, 1].legend([f'{styles["EDA"]["label"]} Resampleada'])
+    axs[0, 1].legend([f'{styles["EDA"]["label"]}'])
 
     # BVP
     axs[1, 0].scatter(bvp_filtered['Timestamp'], bvp_filtered['BVP'], s=point_size, **styles['BVP'])
@@ -67,7 +67,7 @@ def plot_resampled_comparison(original_data, resampled_data, subject_id, session
                    linestyle=line_style, alpha=line_alpha)
     axs[1, 0].set_ylabel('BVP')
     axs[1, 0].legend([styles['BVP']['label']])
-    axs[1, 1].legend([f'{styles["BVP"]["label"]} Resampleada'])
+    axs[1, 1].legend([f'{styles["BVP"]["label"]}'])
 
     # ACC_X, ACC_Y y ACC_Z juntas en una sola gráfica
     for component in ['ACC_X', 'ACC_Y', 'ACC_Z']:
@@ -79,7 +79,7 @@ def plot_resampled_comparison(original_data, resampled_data, subject_id, session
 
         axs[2, 1].scatter(resampled_filtered['Timestamp'], resampled_filtered[component], s=point_size,
                           color=styles[component]['color'], marker=styles[component]['marker'],
-                          label=f'{styles[component]["label"]} Resampleada')
+                          label=f'{styles[component]["label"]}')
         axs[2, 1].plot(resampled_filtered['Timestamp'], resampled_filtered[component], color=styles[component]['color'],
                        linestyle=line_style, alpha=line_alpha)
 
