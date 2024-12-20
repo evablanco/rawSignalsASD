@@ -81,9 +81,7 @@ def get_features_from_dic_prevLabels_bins(data_dict, tp=60, tf=180, bin_size=15,
 def get_features_from_dic_aggObserved_bins(data_dict, tp=60, tf=180, bin_size=15, freq=32):
     # Calculate the size of one observation bin and the prediction window in terms of datapoints
     win_size = bin_size * freq  # Observation bin size in number of datapoints
-    label_win_size = tf * freq  # Prediction window size in number of datapoints
     output_dict = {}
-    agg_observed_list = []  # List to store observed aggression values within the bin
     for main_key, sub_dict in data_dict.items():
         if main_key not in output_dict:
             output_dict[main_key] = {}
@@ -95,14 +93,15 @@ def get_features_from_dic_aggObserved_bins(data_dict, tp=60, tf=180, bin_size=15
             counter = 0 # Counter to keep track of the current bin
             windows_list = []
             labels_list = []
+            agg_observed_list = []
             # Calculate the endpoint of the next prediction window
-            next_limit = counter * win_size + win_size + label_win_size
+            next_limit = counter * win_size
             # Loop to extract bins until the end of the session
             while (next_limit < len(df_subject)):
                 init_win_f = (counter * win_size)  # Start of the current observation bin
                 end_win_f = init_win_f + win_size  # End of the current observation bin
                 init_win_l = end_win_f  # Start of the prediction window
-                end_win_l = init_win_l + label_win_size  # End of the prediction window
+                end_win_l = init_win_l + win_size  # End of the prediction window
                 # Extract data for the observation bin
                 window_data = df_subject.iloc[init_win_f:end_win_f]
                 # Determine the maximum aggression value in the observation bin
@@ -110,16 +109,13 @@ def get_features_from_dic_aggObserved_bins(data_dict, tp=60, tf=180, bin_size=15
                 agg_observed_list.append(agg_observed)
                 win_features = window_data.drop(columns=['Condition'])
                 windows_list.append(win_features)
-                # Check if there was an aggresive episode for the prediction window and store it as the label
-                labels_df = df_subject.iloc[init_win_l:end_win_l]['Condition'].max()
-                labels_list.append(labels_df)
                 # Increment the bin counter and update the endpoint of the next prediction window
                 counter += 1
-                next_limit = counter * win_size + win_size + label_win_size
+                next_limit = counter * win_size
                 #print(f"Window: {counter}, added win_f: [{init_win_f}, {end_win_f}], win_l: [{init_win_l}, {end_win_l}]")
             #print(f"Total windows: {len(windows_list)}, num_labels: {len(labels_list)}")
             #print('')
-            output_dict[main_key][sub_key] = {'features': windows_list, 'aggObserved': agg_observed_list, 'labels': labels_list}
+            output_dict[main_key][sub_key] = {'features': windows_list, 'labels': agg_observed_list}
     #print('done...')
     return output_dict
 
@@ -224,16 +220,13 @@ def split_data_per_session_aggObserved(data_dict, train_ratio=0.8):
         for session, data in sessions.items():
             features = data['features']
             labels = data['labels']
-            aggObserved = data['aggObserved']
             split_idx = int(len(features) * train_ratio)
             train_features = features[:split_idx]
             train_labels = labels[:split_idx]
-            train_aggObs = aggObserved[:split_idx]
             test_features = features[split_idx:]
             test_labels = labels[split_idx:]
-            test_aggObs = aggObserved[split_idx:]
-            train_dict[user][session] = {'features': train_features, 'labels': train_labels, 'aggObserved': train_aggObs}
-            test_dict[user][session] = {'features': test_features, 'labels': test_labels, 'aggObserved': test_aggObs}
+            train_dict[user][session] = {'features': train_features, 'labels': train_labels}
+            test_dict[user][session] = {'features': test_features, 'labels': test_labels}
     return train_dict, test_dict
 
 
@@ -293,27 +286,21 @@ class AggressiveBehaviorDatasetBinLabels(Dataset):
 
 
 class AggressiveBehaviorDatasetBinAGGobserved(Dataset):
-    def __init__(self, data_dict, tp=60, bin_size=15):
+    def __init__(self, data_dict, tp=15, bin_size=15):
         self.data = []
-        self.aggObs = []
         self.labels = []
         self.sequence_size = (tp//bin_size)
         # For each user and session, group each sample of size bin_size into N sequences, where N = (tp / bin_size)
         for user, sessions in data_dict.items():
             for session, session_data in sessions.items():
                 features = session_data['features']
-                aggObserved = session_data['aggObserved']
                 labels = session_data['labels']
                 for i in range(len(features) - self.sequence_size + 1):
                     windows = features[i:i+self.sequence_size]
-                    win_aggObser = aggObserved[i:i+self.sequence_size]
                     win_labels = labels[i:i+self.sequence_size]
                     data_tensor = torch.stack([torch.tensor(window.values.T, dtype=torch.float32) for window in windows])
-                    aggObs_tensor = torch.stack([torch.tensor(aggObs, dtype=torch.float32) for aggObs in win_aggObser])
-                    # Select the label of the last bin as the label of the sequence
-                    label_tensor = torch.tensor(win_labels[-1], dtype=torch.float32)
+                    label_tensor = torch.stack([torch.tensor(win_l, dtype=torch.float32) for win_l in win_labels])
                     self.data.append(data_tensor)
-                    self.aggObs.append(aggObs_tensor.unsqueeze(1))
                     self.labels.append(label_tensor)
         print('')
 
@@ -321,7 +308,7 @@ class AggressiveBehaviorDatasetBinAGGobserved(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        return self.data[idx], self.aggObs[idx], self.labels[idx]
+        return self.data[idx], self.labels[idx]
 
 
 class AggressiveBehaviorDatasetwinLabels(Dataset):

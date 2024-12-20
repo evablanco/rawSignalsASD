@@ -99,7 +99,7 @@ class EEGNetLSTM_v1(nn.Module):
         self.fc = nn.Linear(lstm_hidden_dim, num_classes)
         self.only_features = only_features
 
-    def forward(self, x, prev_label):
+    def forward(self, x, prev_label): # prev_label or aGGObs.
         batch_size, num_seqs, channels, time_steps = x.shape
         # Redimensionar x para dividirlo en num_sequences
         x = x.view(batch_size * num_seqs, channels, time_steps)

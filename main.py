@@ -10,10 +10,10 @@ if __name__ == '__main__':
     parser.add_argument("-d", "--datadir", type=str, default="dataset",
                         help="Data directory (default: ./dataset/)")
     parser.add_argument("-rs", type=bool, default=False, help="Resample signals.")
-    parser.add_argument("-a", "--modelversion", type=int, default=3, help="Model version: 0, 1, 2 or 3")
+    parser.add_argument("-a", "--modelversion", type=int, default=2, help="Model version: 0, 1, 2 or 3")
     parser.add_argument("-featsonly", type=bool, default=False, help="Train models with raw features only")
-    parser.add_argument("-tp", type=int, default=60, help="Number of seconds in the past (default is 60 = 1 min)")
-    parser.add_argument("-tf", type=int, default=180, help="Number of seconds in the future (default is 180 = 3 min)")
+    parser.add_argument("-tp", type=int, default=15, help="Number of seconds in the past (default is 60 = 1 min)")
+    parser.add_argument("-tf", type=int, default=15, help="Number of seconds in the future (default is 180 = 3 min)")
     parser.add_argument("-m", "--model", type=int, default=0,
                         help="model type (default is 0: population model. Use 1 for individual models)")
     parser.add_argument("-bs", "--bin_size", type=int, default='15', help="Bin duration in seconds (default=15)")
@@ -40,7 +40,7 @@ if __name__ == '__main__':
     # Version 2: Generate samples in 15 second bins, group into N sequences based on tp, extract features per bin and
     # concatenate with variable indicating if there was an aggressive behavior in the bin.
     # Version 3: generate samples with the entire past complete window, extract features and concatenate with
-    # variable indicating if there was an aggressive behavior in the window.
+    # variable indicating if there was an aggressive behavior in the window. (wrong label)
     ##########
 
     #########
