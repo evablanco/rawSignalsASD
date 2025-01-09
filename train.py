@@ -8,6 +8,8 @@ from sklearn.metrics import roc_curve, f1_score, roc_auc_score
 import models
 import data_utils
 from torch.utils.data import DataLoader
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold
 
 
 def evaluate_val_auc_model(model, test_dataloader, device):
@@ -63,7 +65,7 @@ def evaluate_model(model, test_dataloader, device):
 
 def train_model(model, train_dataloader, val_dataloader, criterion, optimizer, num_epochs, device):
     best_auc = 0
-    patience = 5
+    patience = 10
     counter_patience = 0
     train_losses = []
     for epoch in range(num_epochs):
@@ -132,7 +134,7 @@ def retrain_model(model, train_dataloader, test_dataloader, criterion, optimizer
     print(f'Test results: f1_s: {f1_s}, best_th: {best_th}, best_f1: {best_f1}, auc: {auc_roc_s}.')
     print('')
     results = {
-        "Experiment": exp_name,
+        "Fold": exp_name,
         "F1-Score": f1_s,
         'Best_F1-score': best_f1,
         'Best_th': best_th,
@@ -146,7 +148,7 @@ def retrain_model(model, train_dataloader, test_dataloader, criterion, optimizer
 def set_model(model_code):
     if model_code == 0:
         model_fun = models.EEGNetLSTM
-        features_fun = data_utils.get_features_from_dic_aggObserved_bins
+        features_fun = data_utils.get_features_from_dict_bins
         dataloader_fun = data_utils.AggressiveBehaviorDatasetBin
         split_fun = data_utils.split_data_per_session
     else:
@@ -161,29 +163,91 @@ def create_dataloader(dataloader_fun, output_dict, tp, bin_size, batch_size, shu
     return dataloader
 
 
+
+
+
+def generate_user_kfolds(data_dict, k=5):
+    # Genera k particiones de los IDs de sujetos utilizando KFold
+    #Args:
+    #    data_dict (dict): Diccionario de datos organizado por usuario y sesión.
+    #    k (int): Número de pliegues para la validación cruzada.
+    #Returns: list: Lista de tuplas, donde cada tupla contiene dos listas (train_uids, test_uids) para cada fold.
+
+    # Extraer todos los SubjectIDs (uids) unicos del diccionario
+    uids = list(data_dict.keys())
+    # Inicializar KFold
+    kf = KFold(n_splits=k, shuffle=True, random_state=42)
+    # Generar particiones
+    folds = []
+    for train_idx, test_idx in kf.split(uids):
+        train_uids = [uids[i] for i in train_idx]
+        test_uids = [uids[i] for i in test_idx]
+        folds.append((train_uids, test_uids))
+    return folds
+
+
+def get_partitions_from_fold(data_dict, train_uids, test_uids, seed):
+    # obtener diccionario de los usuarios de train
+    train_dict = {uid: data_dict[uid] for uid in train_uids}
+    # obtener diccionario de los usuarios de test
+    test_dict = {uid: data_dict[uid] for uid in test_uids}
+    # Dividir los usuarios de entrenamiento en entrenamiento y validación
+    train_uids_split, val_uids_split = train_test_split(train_uids, test_size=0.2, random_state=seed)
+    train_dict_split = {uid: train_dict[uid] for uid in train_uids_split}
+    val_dict_split = {uid: train_dict[uid] for uid in val_uids_split}
+    print(f"  Train UIDs (después de apartar validación): {train_uids_split}")
+    print(f"  Val UIDs: {val_uids_split}")
+    # Dividir diccionario de usuarios de val, 80% inicial de la sesion a train y el 20% final a val
+    train_dict_val, test_dict_val = data_utils.new_split_data_per_session(val_dict_split, train_ratio=0.8)
+    # Dividir diccionario de usuarios de test, 80% inicial de la sesion a train y el 20% final a test
+    train_dict_test, test_dict_test = data_utils.new_split_data_per_session(test_dict, train_ratio=0.8)
+    # Añadir al diccionario de train los datos de train_dict_test y train_dict_val
+    for uid, data in {**train_dict_test, **train_dict_val}.items():
+        if uid not in train_dict_split:
+            train_dict_split[uid] = {}
+        train_dict_split[uid].update(data)
+    print(f"  Train UIDs (final): {list(train_dict_split.keys())}")
+    # Añadir al diccionario de train (con el conjunto de val incluido) los datos de train_dict_test
+    for uid, data in train_dict_test.items():
+        if uid not in train_dict:
+            train_dict[uid] = {}
+        train_dict[uid].update(data)
+    print(f"  Train UIDs (final): {list(train_dict_split.keys())}")
+    # todos los usuarios en el conjunto de train, pero los usuarios del conjunto de test/validacion
+    # solo tienen el 80% inicial de sus sesiones
+    return train_dict_split, test_dict_val, test_dict_test, train_dict
+
+
 def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, only_features, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
     data_dict = data_utils.load_data_to_dict(ds_path)
-    data_dict = dict(list(data_dict.items())[:1])
+    #data_dict = dict(list(data_dict.items())[:1])
+    num_folds = 5  # TO-DO: configurar particones para cada exp!
+    folds = generate_user_kfolds(data_dict, k=num_folds)
     EEG_channels = 5
     model_fun, features_fun, dataloader_fun, split_fun = set_model(model_code)
-    num_exps = 10 # TO-DO: configurar particones para cada exp!
     tp, tf, stride, bin_size = tp, tf, 15, 15
     print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
     final_results = []
-    for exp in range(0, num_exps):
-        # TO-DO: configurar particones para cada exp!
-        output_dict = features_fun(data_dict, tp, tf, bin_size, freq)
-        train_dict_, test_dict = split_fun(output_dict, train_ratio=0.8)
-        train_dict, val_dict = split_fun(train_dict_, train_ratio=0.8)
+    for fold_idx, (train_uids, test_uids) in enumerate(folds):
+        print(f"Fold {fold_idx + 1}:")
+        print(f"  Train UIDs: {train_uids}")
+        print(f"  Test UIDs: {test_uids}")
+        # Obtener particiones de train, val y test en funcion de los ids del fold
+        train_dict, val_dict, test_dict, all_train_dict = get_partitions_from_fold(data_dict, train_uids, test_uids, seed)
+        # Dividir las sesiones de cada usuario en bins de 15 segundos y almacenar raw signals y etiquetas
+        # (variable binaria que indica la ocurrencia de un episodio agresivo en el bin)
+        train_data = features_fun(train_dict, tp, tf, bin_size, freq)
+        val_data = features_fun(val_dict, tp, tf, bin_size, freq)
+        test_data = features_fun(test_dict, tp, tf, bin_size, freq)
 
         batch_size = 128
-        dataloader = create_dataloader(dataloader_fun, train_dict, tp, bin_size, batch_size, shuffle=True)
-        dataloader_val = create_dataloader(dataloader_fun, val_dict, tp, bin_size, batch_size, shuffle=False)
-        dataloader_test = create_dataloader(dataloader_fun, test_dict, tp, bin_size, batch_size, shuffle=False)
+        dataloader = create_dataloader(dataloader_fun, train_data, tp, bin_size, batch_size, shuffle=True)
+        dataloader_val = create_dataloader(dataloader_fun, val_data, tp, bin_size, batch_size, shuffle=False)
+        dataloader_test = create_dataloader(dataloader_fun, test_data, tp, bin_size, batch_size, shuffle=False)
 
         for batch_features, batch_labels in dataloader:
             print(f"Features: {batch_features.shape}")
@@ -230,7 +294,8 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
                                       optimizer, num_epochs, device)
 
         final_model = model_fun(eegnet_params, lstm_hidden_dim, only_features, num_classes).to(device)
-        dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, bin_size, batch_size, shuffle=True)
+        all_train_data = features_fun(all_train_dict, tp, tf, bin_size, freq)
+        dataloader_final = create_dataloader(dataloader_fun, all_train_data, tp, bin_size, batch_size, shuffle=True)
 
         labels_list = []
         for _, labels in dataloader_final:
@@ -250,16 +315,16 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         pos_weight_tensor = torch.tensor([positive_class_weight]).to(device)
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
         optimizer = Adam(final_model.parameters(), lr=0.001)
-        path_model = path_models + 'tf' + str(tf) + '_tp' + str(tp) +  '_exp_' + str(exp) + '_model.pth'
+        path_model = path_models + 'tf' + str(tf) + '_tp' + str(tp) +  '_fold_' + str(fold_idx) + '_model.pth'
         results = retrain_model(final_model, dataloader_final, dataloader_test, criterion, optimizer, best_num_epochs,
-                                device, exp, path_model)
+                                device, fold_idx, path_model)
         final_results.append(results)
 
     results_df = pd.DataFrame(final_results)
     avg_metrics = results_df[['F1-Score', 'Best_F1-score', 'Best_th', 'AUC-ROC', 'Num_epochs']].mean()
     std_metrics = results_df[['F1-Score', 'Best_F1-score', 'Best_th', 'AUC-ROC', 'Num_epochs']].std()
     summary_df = pd.DataFrame({
-        "Experiment": ["Avg.", "Std."],
+        "Fold": ["Avg.", "Std."],
         'F1-Score': [avg_metrics['F1-Score'], std_metrics['F1-Score']],
         'Best_F1-score': [avg_metrics['Best_F1-score'], std_metrics['Best_F1-score']],
         'Best_th': [avg_metrics['Best_th'], std_metrics['Best_th']],
@@ -267,9 +332,10 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         'Num_epochs': [avg_metrics['Num_epochs'], std_metrics['Num_epochs']]
     })
     final_results_df = pd.concat([results_df, summary_df], ignore_index=True)
-    path_to_save_results = f'{path_results}PM_SS_model{model_code}_onlyFeats{only_features}_tf{tf}_tp{tp}_all_experiments_results.csv'
+    path_to_save_results = f'{path_results}PM_SS_model{model_code}_onlyFeats{only_features}_tf{tf}_tp{tp}_all_experiments_results_5cv.csv'
     final_results_df.to_csv(path_to_save_results, index=False)
     print("Results saved successfully.")
+
 
 
 def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, only_features, seed=1):
