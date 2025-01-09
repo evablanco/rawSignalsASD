@@ -2,7 +2,7 @@ import pandas as pd
 from torch.utils.data import DataLoader, Dataset
 import os
 import torch
-
+import numpy as np
 
 def load_data_to_dict(path):
     df = pd.read_csv(path, dtype={'SubjectID': str, 'SessionID': str})
@@ -78,7 +78,7 @@ def get_features_from_dic_prevLabels_bins(data_dict, tp=60, tf=180, bin_size=15,
     return output_dict
 
 
-def get_features_from_dic_aggObserved_bins(data_dict, tp=60, tf=180, bin_size=15, freq=32):
+def get_features_from_dict_bins(data_dict, tp=60, tf=180, bin_size=15, freq=32):
     # Calculate the size of one observation bin and the prediction window in terms of datapoints
     win_size = bin_size * freq  # Observation bin size in number of datapoints
     output_dict = {}
@@ -94,7 +94,7 @@ def get_features_from_dic_aggObserved_bins(data_dict, tp=60, tf=180, bin_size=15
             windows_list = []
             labels_list = []
             agg_observed_list = []
-            # Calculate the endpoint of the next prediction window
+            # Calculate the endpoint of the next window
             next_limit = counter * win_size + win_size
             # Loop to extract bins until the end of the session
             while (next_limit < len(df_subject)):
@@ -109,7 +109,7 @@ def get_features_from_dic_aggObserved_bins(data_dict, tp=60, tf=180, bin_size=15
                 agg_observed_list.append(agg_observed)
                 win_features = window_data.drop(columns=['Condition'])
                 windows_list.append(win_features)
-                # Increment the bin counter and update the endpoint of the next prediction window
+                # Increment the bin counter and update the endpoint of the next window
                 counter += 1
                 next_limit = counter * win_size + win_size
                 #print(f"Window: {counter}, added win_f: [{init_win_f}, {end_win_f}], win_l: [{init_win_l}, {end_win_l}]")
@@ -247,6 +247,22 @@ def split_data_per_session(data_dict, train_ratio=0.8):
             test_dict[user][session] = {'features': test_features, 'labels': test_labels}
     return train_dict, test_dict
 
+def new_split_data_per_session(data_dict, train_ratio=0.8):
+    # data_dict (dict): Diccionario con datos organizados por usuario y sesión.
+    # train_ratio (float): Proporción de datos para el conjunto de entrenamiento
+    train_dict = {}
+    test_dict = {}
+    for user, sessions in data_dict.items():
+        train_dict[user] = {}
+        test_dict[user] = {}
+        for session, data in sessions.items():
+            split_idx = int(len(data) * train_ratio)
+            train_data = data.iloc[:split_idx]
+            test_data = data.iloc[split_idx:]
+            train_dict[user][session] = train_data
+            test_dict[user][session] = test_data
+    return train_dict, test_dict
+
 
 def split_data_per_session_prevLabel(data_dict, train_ratio=0.8):
     train_dict = {}
@@ -327,6 +343,93 @@ class AggressiveBehaviorDatasetBin(Dataset):
 
     def __getitem__(self, idx):
         return self.data[idx], self.labels[idx]
+
+
+
+
+class New_AggressiveBehaviorDatasetBin(Dataset):
+    def __init__(self, data_dict, tp=15, tf=15, bin_size=15):
+        # tp: Observation time (s.)
+        # tf: Prediction time (s.)
+        # bin_size: bin size (s.)
+        # self.data contains past windows (sequences of bins) with the signal data associated with each bin in the range (t-tp, t)
+        # self.labels contains the label obtained from the prediction window associated with each past window,
+        # indicating the occurrence of an aggressive eppisode in the range (t, t+tf).
+        # sliding windows of size bin_size are used
+        self.data = []
+        self.labels = []
+        # number of bins in the past window
+        self.sequence_size = (tp//bin_size)
+        # number of bins in the prediction window
+        self.prediction_sequence_size = (tf // bin_size)
+        # For each user and session, group each sample of size bin_size into N sequences, where N = (tp / bin_size)
+        for user, sessions in data_dict.items():
+            for session, session_data in sessions.items():
+                features = session_data['features']
+                labels = session_data['labels']
+                for i in range(len(features) - self.sequence_size - self.prediction_sequence_size + 1):
+                    # Get the signal values for each bin within the observation window (t-tp, t)
+                    windows = features[i:i+self.sequence_size]
+                    data_tensor = torch.stack([torch.tensor(window.values.T, dtype=torch.float32) for window in windows])
+                    self.data.append(data_tensor)
+                    # check if there was an aggressive episode (aggObs) in the prediction interval (t, t+tf)
+                    prediction_label = np.max(labels[i + self.sequence_size: i + self.sequence_size + self.prediction_sequence_size])
+                    label_tensor = torch.tensor(prediction_label, dtype=torch.float32)
+                    self.labels.append(label_tensor)
+                    # win_labels = labels[i:i + self.sequence_size] # AGGObserved, not used
+                    # labels_bins_tensor = torch.stack([torch.tensor(win_l, dtype=torch.float32) for win_l in win_labels]) # AGGObserved, not used
+        print('')
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx], self.labels[idx]
+
+
+class New_AggressiveBehaviorDatasetBin_AGGObserved(Dataset):
+    def __init__(self, data_dict, tp=15, tf=15, bin_size=15):
+        # tp: Observation time (s.)
+        # tf: Prediction time (s.)
+        # bin_size: bin size (s.)
+        # self.data contains past windows (sequences of bins) with the signal data associated with each bin in the range (t-tp, t)
+        # self.aggObs indicates the occurrence of an aggressive episode within each bin in the range (t-tp, t)
+        # self.labels contains the label obtained from the prediction window associated with each past window,
+        # indicating the occurrence of an aggressive eppisode in the range (t, t+tf).
+        # sliding windows of size bin_size are used
+        self.data = []
+        self.labels = []
+        self.aggObs = []
+        self.sequence_size = (tp//bin_size) # no. of past bins
+        self.prediction_bins = (tf//bin_size) # no. of prediction bins
+        # For each user and session, group each sample of size bin_size into N sequences, where N = (tp / bin_size)
+        for user, sessions in data_dict.items():
+            for session, session_data in sessions.items():
+                features = session_data['features']
+                labels = session_data['labels']
+                for i in range(len(features) - self.sequence_size - self.prediction_bins + 1):
+                    # get the signal values for each bin within the observation window (t-tp, t)
+                    windows = features[i:i+self.sequence_size]
+                    data_tensor = torch.stack(
+                        [torch.tensor(window.values.T, dtype=torch.float32) for window in windows])
+                    self.data.append(data_tensor)
+                    # check if there was an aggresive eppisode within the bins (aggObs)
+                    win_labels = labels[i:i+self.sequence_size]
+                    aggObsr_tensor = torch.stack([torch.tensor(win_l, dtype=torch.float32) for win_l in win_labels])
+                    self.aggObs.append(aggObsr_tensor)
+                    # check if there was an aggressive episode (aggObs) in the prediction interval (t, t+tf)
+                    prediction_labels = labels[i+self.sequence_size:i+self.sequence_size+self.prediction_bins]
+                    label_tensor = torch.tensor(np.max(prediction_labels), dtype=torch.float32)
+                    self.labels.append(label_tensor)
+        print('')
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx], self.aggObs[idx], self.labels[idx]
+
+
 
 
 class AggressiveBehaviorDatasetwinLabels(Dataset):
