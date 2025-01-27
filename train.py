@@ -22,6 +22,8 @@ def evaluate_val_auc_model(model, test_dataloader, device):
             batch_labels = batch_labels.to(device)
             logits = model(batch_features)
             probs = torch.sigmoid(logits).squeeze()
+            if probs.dim() == 0:
+                probs = probs.unsqueeze(0)
             all_probs.extend(probs.cpu().numpy())
             all_labels.extend(batch_labels.cpu().numpy())
     return roc_auc_score(all_labels, all_probs)
@@ -37,6 +39,8 @@ def evaluate_val_auc_model_aGGObs(model, test_dataloader, device):
             batch_labels = batch_labels.to(device)
             logits = model(batch_features, batch_aGGObs)
             probs = torch.sigmoid(logits).squeeze()
+            if probs.dim() == 0:
+                probs = probs.unsqueeze(0)
             all_probs.extend(probs.cpu().numpy())
             all_labels.extend(batch_labels.cpu().numpy())
     return roc_auc_score(all_labels, all_probs)
@@ -52,6 +56,8 @@ def evaluate_model(model, test_dataloader, device):
             batch_labels = batch_labels.to(device)
             logits = model(batch_features)
             probs = torch.sigmoid(logits).squeeze()
+            if probs.dim() == 0:
+                probs = probs.unsqueeze(0)
             all_probs.extend(probs.cpu().numpy())
             all_labels.extend(batch_labels.cpu().numpy())
 
@@ -88,6 +94,8 @@ def evaluate_model_aGGObs(model, test_dataloader, device):
             batch_labels = batch_labels.to(device)
             logits = model(batch_features, batch_aGGObs)
             probs = torch.sigmoid(logits).squeeze()
+            if probs.dim() == 0:
+                probs = probs.unsqueeze(0)
             all_probs.extend(probs.cpu().numpy())
             all_labels.extend(batch_labels.cpu().numpy())
 
@@ -242,6 +250,16 @@ def train_model_AGGObs(model, train_dataloader, val_dataloader, num_epochs, devi
 def invalid_data(dataloader):
     labels_list = []
     for _, labels in dataloader:
+        labels_flat = labels.numpy().flatten()
+        labels_list.extend(labels_flat)
+    labels_array = np.array(labels_list)
+    print(f'Total samples: {len(labels_array)}, 0: {len(labels_array) - np.sum(labels_array)}, 1:{np.sum(labels_array)}')
+    return (len(np.unique(labels_array)) == 1)
+
+def invalid_data_PDM(dataloader):
+    labels_list = []
+    for batch in dataloader:
+        labels = batch[-1]
         labels_flat = labels.numpy().flatten()
         labels_list.extend(labels_flat)
     labels_array = np.array(labels_list)
@@ -442,7 +460,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
     data_dict = data_utils.load_data_to_dict(ds_path)
-    data_dict = dict(list(data_dict.items())[:20])
+    #data_dict = dict(list(data_dict.items())[:20])
     num_folds = 5
     folds = generate_user_kfolds(data_dict, k=num_folds)
     EEG_channels = 5
@@ -517,7 +535,7 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
     data_dict = data_utils.load_data_to_dict(ds_path)
     #data_dict = dict(list(data_dict.items())[:2])
     EEG_channels = 5
-    model_fun, features_fun, dataloader_fun, _, _ = set_model(model_code)
+    model_fun, features_fun, dataloader_fun, train_fun, retrain_fun = set_model(model_code) ##############################################
     num_exps = 10 # TO-DO: configurar particones para cada exp!
     tp, tf, stride, bin_size = tp, tf, 15, 15
     print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
@@ -528,47 +546,20 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
         first_item = dict(list(data_dict.items())[:1])
         key_subject = list(first_item.keys())[0]
         print('userID: ', key_subject)
-
         output_dict = features_fun(first_item, tf, tp, bin_size, freq)
         train_dict_, test_dict = data_utils.split_data_per_session(output_dict, train_ratio=0.8)
         train_dict, val_dict = data_utils.split_data_per_session(train_dict_, train_ratio=0.8)
-
         batch_size = 16
         dataloader = create_dataloader(dataloader_fun, train_dict, tp, bin_size, batch_size, shuffle=True)
         dataloader_val = create_dataloader(dataloader_fun, val_dict, tp, bin_size, batch_size, shuffle=False)
         dataloader_test = create_dataloader(dataloader_fun, test_dict, tp, bin_size, batch_size, shuffle=False)
+        dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, bin_size, batch_size, shuffle=True)
 
-        for batch_features, batch_AGGObs, batch_labels in dataloader:
-            print(f"Features: {batch_features.shape}")
-            print(f"Labels: {batch_labels.shape}")
-            break
-
-        if invalid_data(dataloader) or invalid_data(dataloader_test) or invalid_data(dataloader_val):
+        if invalid_data_PDM(dataloader) or invalid_data_PDM(dataloader_test) or invalid_data_PDM(dataloader_val) or invalid_data_PDM(dataloader_final):
             invalid_users.append(key_subject)
         else:
-            # compute class weights
-            labels_list = []
-            for _, _, labels in dataloader:
-                labels_flat = labels.numpy().flatten()
-                labels_list.extend(labels_flat)
-            labels_array = np.array(labels_list)
-            print(
-                f'Total samples: {len(labels_array)}, 0: {len(labels_array) - np.sum(labels_array)}, 1:{np.sum(labels_array)}')
-            class_weights = compute_class_weight(
-                class_weight='balanced',
-                classes=np.unique(labels_list),
-                y=labels_list
-            )
-            class_weights_dict = dict(zip(np.unique(labels_list), class_weights))
-            print('class_weights_dict: ', class_weights_dict)
-            positive_class_weight = class_weights_dict[1]
-            pos_weight_tensor = torch.tensor([positive_class_weight]).to(device)
-
             # create model
             num_sequences = tp // bin_size  # tp//bin_size en EEGNetLSTMwinLabelsSeqs_binS
-            if model_code == 0 or model_code == 3:
-                num_sequences = 1
-            bin_size = 15
             eegnet_params = {
                 'num_electrodes': EEG_channels,  # (EDA, ACC_X, ACC_Y, ACC_Z, BVP) | (EDA, ACC_Norm, BVP) | ....
                 'chunk_size': tp * freq // num_sequences  # muestras en cada ventana
@@ -576,38 +567,17 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
             lstm_hidden_dim = 64
             num_classes = 1
             model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
-            criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
-            optimizer = Adam(model.parameters(), lr=0.001)
             num_epochs = 100
 
-            best_num_epochs = train_model(model, dataloader, dataloader_val, criterion,
-                                          optimizer, num_epochs, device)
+            best_num_epochs = train_fun(model, dataloader, dataloader_val, num_epochs, device)
 
             final_model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
-            dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, bin_size, batch_size, shuffle=True)
+            #dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, bin_size, batch_size, shuffle=True)
 
-            labels_list = []
-            for _, _, labels in dataloader_final:
-                labels_flat = labels.numpy().flatten()
-                labels_list.extend(labels_flat)
-            labels_array = np.array(labels_list)
-            print(
-                f'Total samples: {len(labels_array)}, 0: {len(labels_array) - np.sum(labels_array)}, 1:{np.sum(labels_array)}')
-            class_weights = compute_class_weight(
-                class_weight='balanced',
-                classes=np.unique(labels_list),
-                y=labels_list
-            )
-            class_weights_dict = dict(zip(np.unique(labels_list), class_weights))
-            print('class_weights_dict: ', class_weights_dict)
-            positive_class_weight = class_weights_dict[1]
-            pos_weight_tensor = torch.tensor([positive_class_weight]).to(device)
-            criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
-            optimizer = Adam(final_model.parameters(), lr=0.001)
-            exp_name = 'tp_' + str(tp) + '_tf' + str(tf)
+
             path_model = path_models + 'tf' + str(tf) + '_tp' + str(tp) +  '_exp_' + key_subject + '_model.pth'
-            results = retrain_model(final_model, dataloader_final, dataloader_test, criterion, optimizer, best_num_epochs,
-                                    device, key_subject, path_model)
+            results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs,
+                                  device, key_subject, path_model)
             final_results.append(results)
         data_dict.pop(next(iter(first_item)))
 

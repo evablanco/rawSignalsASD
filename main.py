@@ -10,8 +10,8 @@ if __name__ == '__main__':
     parser.add_argument("-d", "--datadir", type=str, default="dataset",
                         help="Data directory (default: ./dataset/)")
     parser.add_argument("-rs", type=bool, default=False, help="Resample signals.")
-    parser.add_argument("-a", "--modelversion", type=int, default=1, help="Model version: 1")
-    parser.add_argument("-tp", type=int, default=60, help="Number of seconds in the past (default is 60 = 1 min)")
+    parser.add_argument("-a", "--modelversion", type=int, default=2, help="Model version: 1")
+    parser.add_argument("-tp", type=int, default=120, help="Number of seconds in the past (default is 60 = 1 min)")
     parser.add_argument("-tf", type=int, default=180, help="Number of seconds in the future (default is 180 = 3 min)")
     parser.add_argument("-m", "--model", type=int, default=0,
                         help="model type (default is 0: population model. Use 1 for individual models)")
@@ -38,7 +38,7 @@ if __name__ == '__main__':
     #   extract features per bin, labels indicate whether there was an aggressive episode within the prediction window,
     #   i.e., bins in the interval (t, t+tf).
     # Version 2: Generate samples in 15-second bins, get observation windows composed of bins in the interval (t-tp,t),
-    #   extract features per bin, concatenate features with aggObs,  which indicates if there was an aggressive episode
+    #   extract features per bin, concatenate features with aggObs, which indicates if there was an aggressive episode
     #   within the bin, labels indicate whether there was an aggressive episode within the prediction window,
     #   i.e., bins in the interval (t, t+tf).
     ##########
@@ -46,7 +46,6 @@ if __name__ == '__main__':
 
     if args.rs:
         resample_dataset.resample_dataset(data_path,data_path_resampled)
-
     if args.model == 0:
         print('Exps PM:')
         train.start_exps_PM(tp, tf, freq, data_path_resampled, results_path, models_path, model_version)
