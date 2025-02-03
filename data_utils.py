@@ -20,6 +20,125 @@ def load_data_to_dict(path):
     return data_dict
 
 
+def load_data_to_dict_ACCNorm(path):
+    df = pd.read_csv(path, dtype={'SubjectID': str, 'SessionID': str})
+    #df = df[['SubjectID', 'SessionID', 'Timestamp','EDA', 'ACC_X', 'ACC_Y', 'ACC_Z', 'BVP', 'AGG', 'ED', 'SIB', 'Condition']]
+    df = df[['SubjectID', 'SessionID', 'Timestamp', 'EDA', 'ACC_X', 'ACC_Y', 'ACC_Z', 'BVP', 'Condition']]
+    data_dict = {}
+    for (subject_id, session_id), group_df in df.groupby(['SubjectID', 'SessionID']):
+        #group_df = group_df.reset_index(drop=True)
+        group_df['Timestamp'] = pd.to_datetime(group_df['Timestamp'], unit='ms')
+        group_df = group_df.set_index('Timestamp')
+        if subject_id not in data_dict:
+            data_dict[subject_id] = {}
+        #data_dict[subject_id][session_id] = group_df[['EDA', 'ACC_X', 'ACC_Y', 'ACC_Z', 'BVP', 'AGG', 'ED', 'SIB', 'Condition']]
+        acc_data = (group_df[['ACC_X', 'ACC_Y', 'ACC_Z']]).to_numpy().astype(float)
+        group_df['ACCNorm'] = np.linalg.norm(acc_data, axis=1)
+        data_dict[subject_id][session_id] = group_df[['EDA', 'BVP', 'ACCNorm', 'Condition']]
+    return data_dict
+
+
+def load_data_to_dict_noACC(path):
+    df = pd.read_csv(path, dtype={'SubjectID': str, 'SessionID': str})
+    #df = df[['SubjectID', 'SessionID', 'Timestamp','EDA', 'ACC_X', 'ACC_Y', 'ACC_Z', 'BVP', 'AGG', 'ED', 'SIB', 'Condition']]
+    df = df[['SubjectID', 'SessionID', 'Timestamp', 'EDA', 'BVP', 'Condition']]
+    data_dict = {}
+    for (subject_id, session_id), group_df in df.groupby(['SubjectID', 'SessionID']):
+        #group_df = group_df.reset_index(drop=True)
+        group_df['Timestamp'] = pd.to_datetime(group_df['Timestamp'], unit='ms')
+        group_df = group_df.set_index('Timestamp')
+        if subject_id not in data_dict:
+            data_dict[subject_id] = {}
+        data_dict[subject_id][session_id] = group_df[['EDA', 'BVP', 'Condition']]
+    return data_dict
+
+
+def load_data_to_dict_noEDA(path):
+    df = pd.read_csv(path, dtype={'SubjectID': str, 'SessionID': str})
+    #df = df[['SubjectID', 'SessionID', 'Timestamp','EDA', 'ACC_X', 'ACC_Y', 'ACC_Z', 'BVP', 'AGG', 'ED', 'SIB', 'Condition']]
+    df = df[['SubjectID', 'SessionID', 'Timestamp', 'ACC_X', 'ACC_Y', 'ACC_Z', 'BVP', 'Condition']]
+    data_dict = {}
+    for (subject_id, session_id), group_df in df.groupby(['SubjectID', 'SessionID']):
+        #group_df = group_df.reset_index(drop=True)
+        group_df['Timestamp'] = pd.to_datetime(group_df['Timestamp'], unit='ms')
+        group_df = group_df.set_index('Timestamp')
+        if subject_id not in data_dict:
+            data_dict[subject_id] = {}
+        #acc_data = (group_df[['ACC_X', 'ACC_Y', 'ACC_Z']]).to_numpy().astype(float)
+        #group_df['ACCNorm'] = np.linalg.norm(acc_data, axis=1)
+        data_dict[subject_id][session_id] = group_df[['BVP', 'ACC_X', 'ACC_Y', 'ACC_Z', 'Condition']]
+    return data_dict
+
+
+def load_data_to_dict_ACC(path):
+    df = pd.read_csv(path, dtype={'SubjectID': str, 'SessionID': str})
+    #df = df[['SubjectID', 'SessionID', 'Timestamp','EDA', 'ACC_X', 'ACC_Y', 'ACC_Z', 'BVP', 'AGG', 'ED', 'SIB', 'Condition']]
+    df = df[['SubjectID', 'SessionID', 'Timestamp', 'ACC_X', 'ACC_Y', 'ACC_Z', 'Condition']]
+    data_dict = {}
+    for (subject_id, session_id), group_df in df.groupby(['SubjectID', 'SessionID']):
+        #group_df = group_df.reset_index(drop=True)
+        group_df['Timestamp'] = pd.to_datetime(group_df['Timestamp'], unit='ms')
+        group_df = group_df.set_index('Timestamp')
+        if subject_id not in data_dict:
+            data_dict[subject_id] = {}
+        #acc_data = (group_df[['ACC_X', 'ACC_Y', 'ACC_Z']]).to_numpy().astype(float)
+        #group_df['ACCNorm'] = np.linalg.norm(acc_data, axis=1)
+        data_dict[subject_id][session_id] = group_df[['ACC_X', 'ACC_Y', 'ACC_Z', 'Condition']]
+    return data_dict
+
+
+
+def load_data_to_dict_BVP(path):
+    df = pd.read_csv(path, dtype={'SubjectID': str, 'SessionID': str})
+    #df = df[['SubjectID', 'SessionID', 'Timestamp','EDA', 'ACC_X', 'ACC_Y', 'ACC_Z', 'BVP', 'AGG', 'ED', 'SIB', 'Condition']]
+    df = df[['SubjectID', 'SessionID', 'Timestamp', 'BVP', 'Condition']]
+    data_dict = {}
+    for (subject_id, session_id), group_df in df.groupby(['SubjectID', 'SessionID']):
+        #group_df = group_df.reset_index(drop=True)
+        group_df['Timestamp'] = pd.to_datetime(group_df['Timestamp'], unit='ms')
+        group_df = group_df.set_index('Timestamp')
+        if subject_id not in data_dict:
+            data_dict[subject_id] = {}
+        #acc_data = (group_df[['ACC_X', 'ACC_Y', 'ACC_Z']]).to_numpy().astype(float)
+        #group_df['ACCNorm'] = np.linalg.norm(acc_data, axis=1)
+        data_dict[subject_id][session_id] = group_df[['BVP', 'Condition']]
+    return data_dict
+
+
+def load_data_to_dict_EDA(path):
+    df = pd.read_csv(path, dtype={'SubjectID': str, 'SessionID': str})
+    #df = df[['SubjectID', 'SessionID', 'Timestamp','EDA', 'ACC_X', 'ACC_Y', 'ACC_Z', 'BVP', 'AGG', 'ED', 'SIB', 'Condition']]
+    df = df[['SubjectID', 'SessionID', 'Timestamp', 'EDA', 'Condition']]
+    data_dict = {}
+    for (subject_id, session_id), group_df in df.groupby(['SubjectID', 'SessionID']):
+        #group_df = group_df.reset_index(drop=True)
+        group_df['Timestamp'] = pd.to_datetime(group_df['Timestamp'], unit='ms')
+        group_df = group_df.set_index('Timestamp')
+        if subject_id not in data_dict:
+            data_dict[subject_id] = {}
+        #acc_data = (group_df[['ACC_X', 'ACC_Y', 'ACC_Z']]).to_numpy().astype(float)
+        #group_df['ACCNorm'] = np.linalg.norm(acc_data, axis=1)
+        data_dict[subject_id][session_id] = group_df[['EDA', 'Condition']]
+    return data_dict
+
+
+def load_data_to_dict_noBVP(path):
+    df = pd.read_csv(path, dtype={'SubjectID': str, 'SessionID': str})
+    df = df[['SubjectID', 'SessionID', 'Timestamp', 'EDA', 'ACC_X', 'ACC_Y', 'ACC_Z', 'Condition']]
+    data_dict = {}
+    for (subject_id, session_id), group_df in df.groupby(['SubjectID', 'SessionID']):
+        #group_df = group_df.reset_index(drop=True)
+        group_df['Timestamp'] = pd.to_datetime(group_df['Timestamp'], unit='ms')
+        group_df = group_df.set_index('Timestamp')
+        if subject_id not in data_dict:
+            data_dict[subject_id] = {}
+        #acc_data = (group_df[['ACC_X', 'ACC_Y', 'ACC_Z']]).to_numpy().astype(float)
+        #group_df['ACCNorm'] = np.linalg.norm(acc_data, axis=1)
+        data_dict[subject_id][session_id] = group_df[['EDA', 'ACC_X', 'ACC_Y', 'ACC_Z', 'Condition']] # 'ACCNorm',
+    return data_dict
+
+
+
 def load_orig_data_dict(base_path = './dataset'):
     subject_data = {}
     for root, dirs, files in os.walk(base_path):

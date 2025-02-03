@@ -192,6 +192,46 @@ class New_EEGNetLSTM_AGGObsr(nn.Module):
         return self.fc(final_output).view(-1)
 
 
+class New_LSTM_AGGObsr(nn.Module):
+    def __init__(self, eegnet_params, lstm_hidden_dim, num_classes=1):
+        super(New_LSTM_AGGObsr, self).__init__()
+        self.lstm = nn.LSTM(input_size=1, hidden_size=lstm_hidden_dim, num_layers=3, batch_first=True)
+        self.fc = nn.Linear(lstm_hidden_dim, num_classes)
+
+    def forward(self, _, aggObs):
+        aggObs = aggObs.unsqueeze(-1)
+        lstm_output, _ = self.lstm(aggObs)
+        final_output = lstm_output[:, -1, :]
+        return self.fc(final_output).view(-1)
+
+
+
+
+
+class EEGNetLSTMwinLabels(nn.Module):
+    def __init__(self, eegnet_params, lstm_hidden_dim, only_features=False, num_classes=1):
+        super(EEGNetLSTMwinLabels, self).__init__()
+        self.eegnet = EEGNet(**eegnet_params)
+        self.eeg_feature_dim = self.eegnet.feature_dim()
+        self.lstm = nn.LSTM(input_size=1, hidden_size=lstm_hidden_dim, num_layers=3, batch_first=True)
+        self.fc = nn.Linear(lstm_hidden_dim, num_classes)
+        self.only_features = only_features
+
+    def forward(self, x, aGGObserved):
+        x = x.unsqueeze(1)
+        eegnet_features = self.eegnet(x)
+        if self.only_features:
+            lstm_input = eegnet_features.unsqueeze(-1)
+        else:
+            aGGObserved = aGGObserved.unsqueeze(1)
+            concatenated = torch.cat((eegnet_features, aGGObserved), dim=1)
+            concatenated = concatenated.unsqueeze(1)
+            lstm_input = concatenated.permute(0, 2, 1)
+        lstm_output, _ = self.lstm(lstm_input)
+        final_output = lstm_output[:, -1, :]
+        return self.fc(final_output)
+
+
 class EEGNetLSTMwinLabels(nn.Module):
     def __init__(self, eegnet_params, lstm_hidden_dim, only_features=False, num_classes=1):
         super(EEGNetLSTMwinLabels, self).__init__()

@@ -453,18 +453,49 @@ def get_partitions_from_fold(data_dict, train_uids, test_uids, seed):
     return train_dict_split, test_dict_val, test_dict_test, train_dict
 
 
+def set_features(feats_code, model_fun):
+    if feats_code == 0: # All,: ACC x, y, z, BVP, EDA, AGGObs
+        EEG_channels = 5
+        load_data_fun = data_utils.load_data_to_dict
+    elif feats_code == 1: # All, ACC Norm
+        EEG_channels = 3
+        load_data_fun = data_utils.load_data_to_dict_ACCNorm
+    elif feats_code == 2: # Solo aGGObsr
+        EEG_channels = None
+        load_data_fun = data_utils.load_data_to_dict_ACCNorm # da igual cual, porque solo se usa aggObs, pero cuantos menos datos mejor
+        model_fun = models.New_LSTM_AGGObsr
+    elif feats_code == 3: # No ACC
+        EEG_channels = 2
+        load_data_fun = data_utils.load_data_to_dict_noACC
+    elif feats_code == 4: # No BVP
+        EEG_channels = 4
+        load_data_fun = data_utils.load_data_to_dict_noBVP
+    elif feats_code == 5: # No EDA
+        EEG_channels = 4
+        load_data_fun = data_utils.load_data_to_dict_noEDA
+    elif feats_code == 6: # Only BVP
+        EEG_channels = 1
+        load_data_fun = data_utils.load_data_to_dict_BVP
+    elif feats_code == 7: # Only ACC
+        EEG_channels = 3
+        load_data_fun = data_utils.load_data_to_dict_ACC
+    elif feats_code == 8:  # Only EDA
+        EEG_channels = 1
+        load_data_fun = data_utils.load_data_to_dict_EDA
+    return load_data_fun, model_fun, EEG_channels
 
-def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, seed=1):
+
+def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code=False, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_fun, features_fun, dataloader_fun, train_fun, retrain_fun = set_model(model_code)
+    load_data_fun, model_fun, EEG_channels = set_features(feats_code, model_fun)
     ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
-    data_dict = data_utils.load_data_to_dict(ds_path)
+    data_dict = load_data_fun(ds_path)
     #data_dict = dict(list(data_dict.items())[:20])
     num_folds = 5
     folds = generate_user_kfolds(data_dict, k=num_folds)
-    EEG_channels = 5
-    model_fun, features_fun, dataloader_fun, train_fun, retrain_fun = set_model(model_code)
     tp, tf, stride, bin_size = tp, tf, 15, 15
     print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
     final_results = []
@@ -521,21 +552,22 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         'Num_epochs': [avg_metrics['Num_epochs'], std_metrics['Num_epochs']]
     })
     final_results_df = pd.concat([results_df, summary_df], ignore_index=True)
-    path_to_save_results = f'{path_results}PM_SS_model{model_code}_tf{tf}_tp{tp}_all_experiments_results_5cv.csv'
+    path_to_save_results = f'{path_results}PM_SS_model{model_code}_tf{tf}_tp{tp}_feats{feats_code}_all_experiments_results_5cv.csv'
     final_results_df.to_csv(path_to_save_results, index=False)
     print("Results saved successfully.")
 
 
 
-def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, seed=1):
+def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code=False, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_fun, features_fun, dataloader_fun, train_fun, retrain_fun = set_model(model_code)
+    load_data_fun, model_fun, EEG_channels = set_features(feats_code, model_fun)
     ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
-    data_dict = data_utils.load_data_to_dict(ds_path)
+    data_dict = load_data_fun(ds_path)
     #data_dict = dict(list(data_dict.items())[:2])
-    EEG_channels = 5
-    model_fun, features_fun, dataloader_fun, train_fun, retrain_fun = set_model(model_code) ##############################################
+    ##############################################
     num_exps = 10 # TO-DO: configurar particones para cada exp!
     tp, tf, stride, bin_size = tp, tf, 15, 15
     print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
@@ -593,6 +625,6 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
         'Num_epochs': [avg_metrics['Num_epochs'], std_metrics['Num_epochs']]
     })
     final_results_df = pd.concat([results_df, summary_df], ignore_index=True)
-    path_to_save_results = f'{path_results}PDM_SS_model{model_code}_tf{tf}_tp{tp}_all_experiments_results.csv'
+    path_to_save_results = f'{path_results}PDM_SS_model{model_code}_tf{tf}_tp{tp}_feats{feats_code}_all_experiments_results.csv'
     final_results_df.to_csv(path_to_save_results, index=False)
     print("Results saved successfully.")
