@@ -203,8 +203,8 @@ def plot_tpr_vs_fpr_all_folds(folds_metrics, path_to_save):
 
 
 model_exp = 0 # PM
-model_versions = [1, 2]
-feat_code = 0
+model_versions = [2]
+feat_code = 2
 tp, tf = 180, 180
 num_folds = 5
 folds = np.arange(num_folds)
@@ -255,7 +255,7 @@ for mv in model_versions:
 
         model_path = f'./models/mv{mv}_f{feat_code}_tf{tf}_tp{tp}_fold{fold_idx}_model.pth'
         print(f"Evaluando modelo {model_path}")
-        model = models_utils.load_model(mv, device, eegnet_params, lstm_hidden_dim, model_path)
+        model = models_utils.load_model(mv, device, eegnet_params, lstm_hidden_dim, model_path, feat_code)
         all_probs, all_labels = models_utils.test_model(model, dataloader_test, device)
         auc_score, fpr, tpr, tnr, fnr, best_f1, best_threshold_f1, thresholds, f1_scores, best_threshold_roc, best_fpr_at_auc, best_tpr_at_auc = evaluate_all_results(
             all_labels, all_probs)

@@ -2,10 +2,8 @@ import torch
 import models
 import data_utils
 
-def load_model(model_code, device, eegnet_params, lstm_hidden_dim, model_path=None):
+def load_model(model_code, device, eegnet_params, lstm_hidden_dim, model_path=None, feat_code=0):
     """
-    Carga el modelo especificado por código y lo transfiere al dispositivo correspondiente.
-
     :param model_code: Código del modelo a cargar (0, 1, 2)
     :param device: Dispositivo donde se cargará el modelo (CPU o GPU)
     :param eegnet_params: Parámetros específicos para EEGNet
@@ -22,12 +20,13 @@ def load_model(model_code, device, eegnet_params, lstm_hidden_dim, model_path=No
         model = models.New_EEGNetLSTM_AGGObsr(eegnet_params, lstm_hidden_dim).to(device)
     else:
         raise ValueError(f"Código de modelo {model_code} no soportado.")
-
+    if feat_code == 2:
+        model = models.New_LSTM_AGGObsr(eegnet_params, lstm_hidden_dim).to(device)
     if model_path:
         model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
         print(f"Modelo cargado desde {model_path}")
 
-    model.eval()  # Poner en modo evaluación por defecto
+    model.eval()
     return model
 
 
@@ -46,8 +45,6 @@ def get_dataloader(model_code): # to-do: move to data_utils...
 
 def test_model(model, test_dataloader, device):
     """
-    Evalúa el modelo en un conjunto de datos de prueba.
-
     :param model: Modelo cargado
     :param test_dataloader: DataLoader con los datos de prueba
     :param device: Dispositivo (CPU o GPU)
