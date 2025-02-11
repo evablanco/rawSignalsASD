@@ -395,8 +395,8 @@ def set_model(model_code):
     return model_fun, features_fun, dataloader_fun, train_fun, retrain_fun
 
 
-def create_dataloader(dataloader_fun, output_dict, tp, bin_size, batch_size, shuffle=False):
-    dataset = dataloader_fun(output_dict, tp, bin_size)
+def create_dataloader(dataloader_fun, output_dict, tp, tf, bin_size, batch_size, shuffle=False):
+    dataset = dataloader_fun(output_dict, tp, tf, bin_size)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=False)
     return dataloader
 
@@ -485,7 +485,7 @@ def set_features(feats_code, model_fun):
     return load_data_fun, model_fun, EEG_channels
 
 
-def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, seed=1):
+def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, bin_s=15, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -496,7 +496,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
     #data_dict = dict(list(data_dict.items())[:20])
     num_folds = 5
     folds = generate_user_kfolds(data_dict, k=num_folds)
-    tp, tf, stride, bin_size = tp, tf, 15, 15
+    tp, tf, stride, bin_size = tp, tf, bin_s, bin_s
     print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
     final_results = []
     for fold_idx, (train_uids, test_uids) in enumerate(folds):
@@ -512,13 +512,12 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         test_data = features_fun(test_dict, tp, tf, bin_size, freq)
 
         batch_size = 128
-        dataloader = create_dataloader(dataloader_fun, train_data, tp, bin_size, batch_size, shuffle=True)
-        dataloader_val = create_dataloader(dataloader_fun, val_data, tp, bin_size, batch_size, shuffle=False)
-        dataloader_test = create_dataloader(dataloader_fun, test_data, tp, bin_size, batch_size, shuffle=False)
+        dataloader = create_dataloader(dataloader_fun, train_data, tp, tf, bin_size, batch_size, shuffle=True)
+        dataloader_val = create_dataloader(dataloader_fun, val_data, tp, tf, bin_size, batch_size, shuffle=False)
+        dataloader_test = create_dataloader(dataloader_fun, test_data, tp, tf, bin_size, batch_size, shuffle=False)
 
         # create model
         num_sequences = tp // bin_size
-        bin_size = 15
         eegnet_params = {
             'num_electrodes': EEG_channels,  # (EDA, ACC_X, ACC_Y, ACC_Z, BVP) | (EDA, ACC_Norm, BVP) | ....
             'chunk_size': tp * freq // num_sequences  # muestras en cada ventana
@@ -532,7 +531,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
 
         final_model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
         all_train_data = features_fun(all_train_dict, tp, tf, bin_size, freq)
-        dataloader_final = create_dataloader(dataloader_fun, all_train_data, tp, bin_size, batch_size, shuffle=True)
+        dataloader_final = create_dataloader(dataloader_fun, all_train_data, tp, tf, bin_size, batch_size, shuffle=True)
 
         path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_fold{fold_idx}_model.pth"
         results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs, device, fold_idx,
@@ -557,7 +556,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
 
 
 
-def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code=False, seed=1):
+def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, bin_s=15, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -568,7 +567,7 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
     #data_dict = dict(list(data_dict.items())[:2])
     ##############################################
     num_exps = 10 # TO-DO: configurar particones para cada exp!
-    tp, tf, stride, bin_size = tp, tf, 15, 15
+    tp, tf, stride, bin_size = tp, tf, bin_s, bin_s
     print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
     final_results = []
     num_users = len(list(data_dict.items()))
@@ -581,10 +580,10 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
         train_dict_, test_dict = data_utils.split_data_per_session(output_dict, train_ratio=0.8)
         train_dict, val_dict = data_utils.split_data_per_session(train_dict_, train_ratio=0.8)
         batch_size = 16
-        dataloader = create_dataloader(dataloader_fun, train_dict, tp, bin_size, batch_size, shuffle=True)
-        dataloader_val = create_dataloader(dataloader_fun, val_dict, tp, bin_size, batch_size, shuffle=False)
-        dataloader_test = create_dataloader(dataloader_fun, test_dict, tp, bin_size, batch_size, shuffle=False)
-        dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, bin_size, batch_size, shuffle=True)
+        dataloader = create_dataloader(dataloader_fun, train_dict, tp, tf, bin_size, batch_size, shuffle=True)
+        dataloader_val = create_dataloader(dataloader_fun, val_dict, tp, tf, bin_size, batch_size, shuffle=False)
+        dataloader_test = create_dataloader(dataloader_fun, test_dict, tp, tf, bin_size, batch_size, shuffle=False)
+        dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, tf, bin_size, batch_size, shuffle=True)
 
         if invalid_data_PDM(dataloader) or invalid_data_PDM(dataloader_test) or invalid_data_PDM(dataloader_val) or invalid_data_PDM(dataloader_final):
             invalid_users.append(key_subject)

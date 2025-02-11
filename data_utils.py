@@ -211,7 +211,6 @@ def get_features_from_dict_bins(data_dict, tp=60, tf=180, bin_size=15, freq=32):
             #print(f"key: {main_key}-{sub_key}, num. values in session: {len(df_subject)}")
             counter = 0 # Counter to keep track of the current bin
             windows_list = []
-            labels_list = []
             agg_observed_list = []
             # Calculate the endpoint of the next window
             next_limit = counter * win_size + win_size
