@@ -485,7 +485,7 @@ def set_features(feats_code, model_fun):
     return load_data_fun, model_fun, EEG_channels
 
 
-def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code=False, seed=1):
+def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -534,8 +534,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         all_train_data = features_fun(all_train_dict, tp, tf, bin_size, freq)
         dataloader_final = create_dataloader(dataloader_fun, all_train_data, tp, bin_size, batch_size, shuffle=True)
 
-
-        path_model = path_models + 'tf' + str(tf) + '_tp' + str(tp) +  '_fold_' + str(fold_idx) + '_model.pth'
+        path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_fold{fold_idx}_model.pth"
         results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs, device, fold_idx,
                               path_model)
         final_results.append(results)
@@ -606,8 +605,7 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
             final_model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
             #dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, bin_size, batch_size, shuffle=True)
 
-
-            path_model = path_models + 'tf' + str(tf) + '_tp' + str(tp) +  '_exp_' + key_subject + '_model.pth'
+            path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_subj{key_subject}_model.pth"
             results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs,
                                   device, key_subject, path_model)
             final_results.append(results)

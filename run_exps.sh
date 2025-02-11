@@ -10,9 +10,9 @@ mkdir -p $LOG_DIR
 # Combinaciones de parámetros
 TP_VALUES=(180)
 TF_VALUE=180
-MODEL_VERSIONS=(1 2)
-F_VALUES=(0 1 2 3 4 5 6 7 8)
-M_VALUES=(0 1)
+MODEL_VERSIONS=(1) # (1 2)
+F_VALUES=(0) # (0 1 2 3 4 5 6 7 8)
+M_VALUES=(0 1) # (0 1)
 
 # Iterar sobre las combinaciones y ejecutar el script
 for TP in "${TP_VALUES[@]}"; do
