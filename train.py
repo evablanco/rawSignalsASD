@@ -43,6 +43,7 @@ def evaluate_val_auc_model_aGGObs(model, test_dataloader, device):
                 probs = probs.unsqueeze(0)
             all_probs.extend(probs.cpu().numpy())
             all_labels.extend(batch_labels.cpu().numpy())
+    neg_samples = np.sum(all_labels)
     return roc_auc_score(all_labels, all_probs)
 
 
@@ -264,7 +265,9 @@ def invalid_data_PDM(dataloader):
         labels_list.extend(labels_flat)
     labels_array = np.array(labels_list)
     print(f'Total samples: {len(labels_array)}, 0: {len(labels_array) - np.sum(labels_array)}, 1:{np.sum(labels_array)}')
-    return (len(np.unique(labels_array)) == 1)
+    #neg_samples = np.sum(labels_array)
+    #classes = np.unique(labels_array)
+    return (len(np.unique(labels_array)) != 2)
 
 
 def retrain_model(model, train_dataloader, test_dataloader, num_epochs, device, exp_name, path_model):
@@ -421,7 +424,23 @@ def generate_user_kfolds(data_dict, k=5):
     return folds
 
 
-def get_partitions_from_fold(data_dict, train_uids, test_uids, seed):
+
+def get_split_fun(split_code, PDM=False):
+    if split_code == 0:
+        if PDM:
+            split_fun = data_utils.split_data_per_session
+        else:
+            split_fun = data_utils.new_split_data_per_session
+    elif split_code == 1:
+        split_fun = data_utils.new_split_data_full_session
+    else:
+        split_fun = None
+        print('Split function not supported...')
+    return split_fun
+
+
+def get_partitions_from_fold(data_dict, train_uids, test_uids, split_code, PDM, seed):
+    split_fun = get_split_fun(split_code, PDM)
     # obtener diccionario de los usuarios de train
     train_dict = {uid: data_dict[uid] for uid in train_uids}
     # obtener diccionario de los usuarios de test
@@ -433,9 +452,9 @@ def get_partitions_from_fold(data_dict, train_uids, test_uids, seed):
     print(f"  Train UIDs (después de apartar validación): {train_uids_split}")
     print(f"  Val UIDs: {val_uids_split}")
     # Dividir diccionario de usuarios de val, 80% inicial de la sesion a train y el 20% final a val
-    train_dict_val, test_dict_val = data_utils.new_split_data_per_session(val_dict_split, train_ratio=0.8)
+    train_dict_val, test_dict_val = split_fun(val_dict_split, train_ratio=0.8)
     # Dividir diccionario de usuarios de test, 80% inicial de la sesion a train y el 20% final a test
-    train_dict_test, test_dict_test = data_utils.new_split_data_per_session(test_dict, train_ratio=0.8)
+    train_dict_test, test_dict_test = split_fun(test_dict, train_ratio=0.8)
     # Añadir al diccionario de train los datos de train_dict_test y train_dict_val
     for uid, data in {**train_dict_test, **train_dict_val}.items():
         if uid not in train_dict_split:
@@ -485,7 +504,7 @@ def set_features(feats_code, model_fun):
     return load_data_fun, model_fun, EEG_channels
 
 
-def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, bin_s=15, seed=1):
+def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -496,7 +515,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
     #data_dict = dict(list(data_dict.items())[:20])
     num_folds = 5
     folds = generate_user_kfolds(data_dict, k=num_folds)
-    tp, tf, stride, bin_size = tp, tf, bin_s, bin_s
+    tp, tf, stride, bin_size = tp, tf, 15, 15
     print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
     final_results = []
     for fold_idx, (train_uids, test_uids) in enumerate(folds):
@@ -504,7 +523,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         print(f"  Train UIDs: {train_uids}")
         print(f"  Test UIDs: {test_uids}")
         # Obtener particiones de train, val y test en funcion de los ids del fold
-        train_dict, val_dict, test_dict, all_train_dict = get_partitions_from_fold(data_dict, train_uids, test_uids, seed)
+        train_dict, val_dict, test_dict, all_train_dict = get_partitions_from_fold(data_dict, train_uids, test_uids, split_code, False, seed)
         # Dividir las sesiones de cada usuario en bins de 15 segundos y almacenar raw signals y etiquetas
         # (variable binaria que indica la ocurrencia de un episodio agresivo en el bin)
         train_data = features_fun(train_dict, tp, tf, bin_size, freq)
@@ -518,6 +537,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
 
         # create model
         num_sequences = tp // bin_size
+        bin_size = 15
         eegnet_params = {
             'num_electrodes': EEG_channels,  # (EDA, ACC_X, ACC_Y, ACC_Z, BVP) | (EDA, ACC_Norm, BVP) | ....
             'chunk_size': tp * freq // num_sequences  # muestras en cada ventana
@@ -533,7 +553,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         all_train_data = features_fun(all_train_dict, tp, tf, bin_size, freq)
         dataloader_final = create_dataloader(dataloader_fun, all_train_data, tp, tf, bin_size, batch_size, shuffle=True)
 
-        path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_fold{fold_idx}_model.pth"
+        path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_fold{fold_idx}_model.pth"
         results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs, device, fold_idx,
                               path_model)
         final_results.append(results)
@@ -550,24 +570,25 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         'Num_epochs': [avg_metrics['Num_epochs'], std_metrics['Num_epochs']]
     })
     final_results_df = pd.concat([results_df, summary_df], ignore_index=True)
-    path_to_save_results = f'{path_results}PM_SS_model{model_code}_tf{tf}_tp{tp}_feats{feats_code}_all_experiments_results_5cv.csv'
+    path_to_save_results = f'{path_results}PM_SS_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_all_experiments_results_5cv.csv'
     final_results_df.to_csv(path_to_save_results, index=False)
     print("Results saved successfully.")
 
 
 
-def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, bin_s=15, seed=1):
+def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model_fun, features_fun, dataloader_fun, train_fun, retrain_fun = set_model(model_code)
     load_data_fun, model_fun, EEG_channels = set_features(feats_code, model_fun)
+    split_fun = get_split_fun(split_code, True)
     ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
     data_dict = load_data_fun(ds_path)
     #data_dict = dict(list(data_dict.items())[:2])
     ##############################################
     num_exps = 10 # TO-DO: configurar particones para cada exp!
-    tp, tf, stride, bin_size = tp, tf, bin_s, bin_s
+    tp, tf, stride, bin_size = tp, tf, 15, 15
     print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
     final_results = []
     num_users = len(list(data_dict.items()))
@@ -577,8 +598,8 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
         key_subject = list(first_item.keys())[0]
         print('userID: ', key_subject)
         output_dict = features_fun(first_item, tf, tp, bin_size, freq)
-        train_dict_, test_dict = data_utils.split_data_per_session(output_dict, train_ratio=0.8)
-        train_dict, val_dict = data_utils.split_data_per_session(train_dict_, train_ratio=0.8)
+        train_dict_, test_dict = split_fun(output_dict, train_ratio=0.8)
+        train_dict, val_dict = split_fun(train_dict_, train_ratio=0.8)
         batch_size = 16
         dataloader = create_dataloader(dataloader_fun, train_dict, tp, tf, bin_size, batch_size, shuffle=True)
         dataloader_val = create_dataloader(dataloader_fun, val_dict, tp, tf, bin_size, batch_size, shuffle=False)
@@ -604,7 +625,7 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
             final_model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
             #dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, bin_size, batch_size, shuffle=True)
 
-            path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_subj{key_subject}_model.pth"
+            path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_subj{key_subject}_model.pth"
             results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs,
                                   device, key_subject, path_model)
             final_results.append(results)
@@ -622,6 +643,155 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
         'Num_epochs': [avg_metrics['Num_epochs'], std_metrics['Num_epochs']]
     })
     final_results_df = pd.concat([results_df, summary_df], ignore_index=True)
-    path_to_save_results = f'{path_results}PDM_SS_model{model_code}_tf{tf}_tp{tp}_feats{feats_code}_all_experiments_results.csv'
+    path_to_save_results = f'{path_results}PDM_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_all_experiments_results.csv'
     final_results_df.to_csv(path_to_save_results, index=False)
     print("Results saved successfully.")
+
+
+
+
+def set_model_multi(model_code):
+    if model_code == 0:
+        pass
+    elif model_code == 1:
+        model_fun = models.New_EEGNetLSTM
+        features_fun = data_utils.get_features_from_dict_bins_multi
+        dataloader_fun = data_utils.New_AggressiveBehaviorDatasetBin_multi
+        train_fun = train_model
+        retrain_fun = retrain_model
+    elif model_code == 2:
+        model_fun = models.New_EEGNetLSTM_AGGObsr
+        features_fun = data_utils.get_features_from_dict_bins_multi
+        dataloader_fun = data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved_multi
+        train_fun = train_model_AGGObs
+        retrain_fun = retrain_model_aGGObs
+    else:
+        print('Not supported yet.')
+        model_fun, features_fun, dataloader_fun, train_fun, retrain_fun = None, None, None, None, None
+    return model_fun, features_fun, dataloader_fun, train_fun, retrain_fun
+
+
+def set_features_multi(feats_code, model_fun):
+    if feats_code == 0: # All,: ACC x, y, z, BVP, EDA, AGGObs
+        EEG_channels = 5
+        load_data_fun = data_utils.load_data_to_dict_multi
+    else:
+        print('Not supported yet... using all features.')
+        EEG_channels = 5
+        load_data_fun = data_utils.load_data_to_dict_multi
+    return load_data_fun, model_fun, EEG_channels
+
+
+def create_dataloader_multi(dataloader_fun, output_dict, label_key, tp, tf, bin_size, batch_size, shuffle=False):
+    dataset = dataloader_fun(output_dict, label_key, tp, tf, bin_size)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=False)
+    return dataloader
+
+def evaluate_ensemble_results_multi(all_labels, probs_sib, probs_agg, probs_ed):
+    # max. de probabilidades (soft voting)
+    final_probs = np.maximum.reduce([probs_sib, probs_agg, probs_ed])
+    auc_score = roc_auc_score(all_labels, final_probs)
+    fpr, tpr, thresholds = roc_curve(all_labels, final_probs)
+
+    best_threshold_auc_idx = np.argmax(tpr - fpr)
+    best_threshold_auc = thresholds[best_threshold_auc_idx]
+
+    best_f1, best_threshold_f1 = 0, 0
+    for threshold in thresholds:
+        predictions = (final_probs >= threshold).astype(int)
+        f1 = f1_score(all_labels, predictions)
+        if f1 > best_f1:
+            best_f1 = f1
+            best_threshold_f1 = threshold
+
+    return {
+        "AUC-ROC": auc_score,
+        "Best F1-Score": best_f1,
+        "Best Threshold (AUC)": best_threshold_auc,
+        "Best Threshold (F1)": best_threshold_f1
+    }
+
+
+def start_exps_PM_multi(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, seed=1):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    PDM = False # variable de control para splits, pq diferente PM de PDM (cambiar en el futuro....)
+    model_fun, features_fun, dataloader_fun, train_fun, retrain_fun = set_model_multi(model_code)
+    load_data_fun, model_fun, EEG_channels = set_features_multi(feats_code, model_fun)
+
+    ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
+    data_dict = load_data_fun(ds_path)
+    #data_dict = dict(list(data_dict.items())[:20])
+
+    num_folds = 5
+    folds = generate_user_kfolds(data_dict, k=num_folds)
+    tp, tf, stride, bin_size = tp, tf, 15, 15
+    print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
+
+    labels_list = ['SIB', 'AGG', 'ED']
+    final_results = {"SIB": [], "AGG": [], "ED": []}
+    ensemble_results_list = []
+    for fold_idx, (train_uids, test_uids) in enumerate(folds):
+        print(f"Fold {fold_idx + 1}:")
+        print(f"  Train UIDs: {train_uids}")
+        print(f"  Test UIDs: {test_uids}")
+
+        # Obtener particiones de train, val y test en funcion de los ids del fold
+        train_dict, val_dict, test_dict, all_train_dict = get_partitions_from_fold(data_dict, train_uids, test_uids, split_code, PDM, seed)
+        # Dividir las sesiones de cada usuario en bins de 15 segundos y almacenar raw signals y etiquetas
+        # (variable binaria que indica la ocurrencia de un episodio agresivo en el bin)
+        train_data = features_fun(train_dict, bin_size, freq)
+        val_data = features_fun(val_dict, bin_size, freq)
+        test_data = features_fun(test_dict, bin_size, freq)
+        batch_size = 128
+
+        for label_type in labels_list:
+            print(f"Training model for {label_type}")
+
+            dataloader = create_dataloader_multi(dataloader_fun, train_data, label_type, tp, tf, bin_size, batch_size, shuffle=True)
+            dataloader_val = create_dataloader_multi(dataloader_fun, val_data, label_type, tp, tf, bin_size, batch_size, shuffle=False)
+            dataloader_test = create_dataloader_multi(dataloader_fun, test_data, label_type, tp, tf, bin_size, batch_size, shuffle=False)
+
+            # create model
+            num_sequences = tp // bin_size
+            bin_size = 15
+            eegnet_params = {
+                'num_electrodes': EEG_channels,  # (EDA, ACC_X, ACC_Y, ACC_Z, BVP) | (EDA, ACC_Norm, BVP) | ....
+                'chunk_size': tp * freq // num_sequences  # muestras en cada ventana
+            }
+            lstm_hidden_dim = 64
+            num_classes = 1
+            model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
+            num_epochs = 100
+
+            best_num_epochs = train_fun(model, dataloader, dataloader_val, num_epochs, device)
+
+            final_model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
+            all_train_data = features_fun(all_train_dict, bin_size, freq)
+            dataloader_final = create_dataloader_multi(dataloader_fun, all_train_data, label_type, tp, tf, bin_size, batch_size, shuffle=True)
+
+            path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_fold{fold_idx}_label{label_type}_model.pth"
+            results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs, device, fold_idx,
+                                  path_model)
+            final_results[label_type].append(results)
+
+    for label_type in labels_list:
+        results_df = pd.DataFrame(final_results[label_type])
+        avg_metrics = results_df[['F1-Score', 'Best_F1-score', 'Best_th', 'AUC-ROC', 'Num_epochs']].mean()
+        std_metrics = results_df[['F1-Score', 'Best_F1-score', 'Best_th', 'AUC-ROC', 'Num_epochs']].std()
+        summary_df = pd.DataFrame({
+            "Fold": ["Avg.", "Std."],
+            'F1-Score': [avg_metrics['F1-Score'], std_metrics['F1-Score']],
+            'Best_F1-score': [avg_metrics['Best_F1-score'], std_metrics['Best_F1-score']],
+            'Best_th': [avg_metrics['Best_th'], std_metrics['Best_th']],
+            'AUC-ROC': [avg_metrics['AUC-ROC'], std_metrics['AUC-ROC']],
+            'Num_epochs': [avg_metrics['Num_epochs'], std_metrics['Num_epochs']]
+        })
+        final_results_df = pd.concat([results_df, summary_df], ignore_index=True)
+        path_to_save_results = f'{path_results}PM_multi_{label_type}_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_all_experiments_results_5cv.csv'
+        final_results_df.to_csv(path_to_save_results, index=False)
+        print(f"Results for {label_type} saved successfully.")
+    print("Results saved successfully.")
+

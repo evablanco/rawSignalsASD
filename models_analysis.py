@@ -202,22 +202,151 @@ def plot_tpr_vs_fpr_all_folds(folds_metrics, path_to_save):
     plt.show()
 
 
-model_exp = 0 # PM
-model_versions = [2]
-feat_code = 2
-tp, tf = 180, 180
-num_folds = 5
-folds = np.arange(num_folds)
+def test_model():
+    model_exp = 0 # PM
+    model_versions = [2]
+    feat_code = 0
+    tp, tf = 180, 180
+    num_folds = 5
+    folds = np.arange(num_folds)
 
-freq = 32
-data_path_resampled = './dataset_resampled/'
-ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
+    freq = 32
+    data_path_resampled = './dataset_resampled/'
+    ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-eegnet_params = {"chunk_size": 151, "num_electrodes": 60, "F1": 8, "F2": 16, "D": 2, "num_classes": 2, "kernel_1": 64, "kernel_2": 16, "dropout": 0.25}
-lstm_hidden_dim = 64
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    eegnet_params = {"chunk_size": 151, "num_electrodes": 60, "F1": 8, "F2": 16, "D": 2, "num_classes": 2, "kernel_1": 64, "kernel_2": 16, "dropout": 0.25}
+    lstm_hidden_dim = 64
 
-for mv in model_versions:
+    for mv in model_versions:
+        folds_metrics = []
+        # Pasos
+        # 1) Cargar conjunto de test
+        # 2) Cargar modelo
+        # 3) Obtener métricas: auc_roc score, tpr, tfr, f1_score
+        # 4) Obtener plots de distribución de métricas en diferentes thresholds (marcados por los que devuelve la función de scipy del auc-score)
+
+        load_data_fun = data_utils.load_data_to_dict  # All,: ACC x, y, z, BVP, EDA, AGGObs, si mv 1 no aggObsr
+        data_dict = load_data_fun(ds_path)
+        num_folds = 5
+        folds = train.generate_user_kfolds(data_dict, k=num_folds)
+        tp, tf, stride, bin_size = tp, tf, 15, 15
+        split_code = 0 # configurar todo en args
+        print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
+        for fold_idx, (train_uids, test_uids) in enumerate(folds):
+            print(f"Fold {fold_idx + 1}:")
+            print(f"  Train UIDs: {train_uids}")
+            print(f"  Test UIDs: {test_uids}")
+            PDM = False
+            # Obtener particiones de test en funcion de los ids del fold
+            _, _, test_dict, _ = train.get_partitions_from_fold(data_dict, train_uids, split_code, PDM, test_uids, seed=1)  # same seed as in train
+            features_fun, dataloader_fun = models_utils.get_dataloader(mv)
+            test_data = features_fun(test_dict, bin_size, freq)
+            batch_size = 128
+            dataloader_test = train.create_dataloader(dataloader_fun, test_data, tp, tf, bin_size, batch_size, shuffle=False)
+
+            # create model
+            num_sequences = tp // bin_size
+            bin_size = 15
+            eegnet_params = {
+                'num_electrodes': 5,  # (EDA, ACC_X, ACC_Y, ACC_Z, BVP) ...
+                'chunk_size': tp * freq // num_sequences  # muestras en cada ventana
+            }
+            lstm_hidden_dim = 64
+            num_classes = 1
+
+            model_path = f'./models/mv{mv}_f{feat_code}_tf{tf}_tp{tp}_bs{bin_size}_fold{fold_idx}_model.pth'
+            print(f"Evaluando modelo {model_path}")
+            model = models_utils.load_model(mv, device, eegnet_params, lstm_hidden_dim, model_path)
+            all_probs, all_labels = models_utils.test_model(model, dataloader_test, device)
+            auc_score, fpr, tpr, tnr, fnr, best_f1, best_threshold_f1, thresholds, f1_scores, best_threshold_roc, best_fpr_at_auc, best_tpr_at_auc = evaluate_all_results(
+                all_labels, all_probs)
+
+            print(f"Fold {fold_idx} - AUC: {auc_score:.4f}, Best F1: {best_f1:.4f}")
+
+            #plot_combined_metrics(all_labels, all_probs, fpr, tpr, tnr, fnr, thresholds, f1_scores, auc_score, best_f1,
+            #                      best_threshold_f1)
+
+            folds_metrics.append({
+                'fpr': fpr,
+                'tpr': tpr,
+                'fnr': fnr,
+                'thresholds': thresholds,
+                'auc_score': auc_score,
+                'fold_idx': fold_idx + 1,
+                'best_threshold_f1': best_threshold_f1,
+                'best_f1': best_f1,
+                'f1_scores': f1_scores,
+                'all_probs': all_probs,
+                'all_labels': all_labels
+            })
+
+        '''
+        plot_five_folds_metrics(folds_metrics)
+        plot_five_folds_rates(folds_metrics)
+        plot_f1_scores(folds_metrics)
+        '''
+        path_analysis_results = './results_analysis/'
+        path_results = f"{path_analysis_results}PM_mv{mv}_f{feat_code}_tf{tf}_tp{tp}_probability_distribution.png"
+        # Análisis para todos los folds
+        plot_distribution_all_folds(folds_metrics, path_results)
+        path_results = f"{path_analysis_results}PM_mv{mv}_f{feat_code}_tf{tf}_tp{tp}_tpr_vs_fpr.png"
+        plot_tpr_vs_fpr_all_folds(folds_metrics, path_results)
+        path_results = f"{path_analysis_results}PM_mv{mv}_f{feat_code}_tf{tf}_tp{tp}_combined_metrics.png"
+        plot_combined_metrics(folds_metrics, path_results)
+
+
+def evaluate_ensemble_results_multi(all_labels, probs_sib, probs_agg, probs_ed, fold_idx):
+    """
+    Evalúa el rendimiento del ensemble considerando la predicción máxima entre los tres modelos.
+    Returns:
+        dict: Contiene AUC-ROC, mejor F1-Score y sus thresholds correspondientes.
+    """
+    # Predicción final usando max (soft voting)
+    final_probs = np.maximum.reduce([probs_sib, probs_agg, probs_ed])
+    # Calcular AUC y ROC
+    auc_score = roc_auc_score(all_labels, final_probs)
+    fpr, tpr, thresholds = roc_curve(all_labels, final_probs)
+    # Threshold óptimo según AUC
+    best_threshold_auc_idx = np.argmax(tpr - fpr)
+    best_threshold_auc = thresholds[best_threshold_auc_idx]
+    # Evaluar mejor F1 dentro de los mismos thresholds de AUC
+    best_f1, best_threshold_f1 = 0, 0
+    f1_scores = []
+    for threshold in thresholds:
+        predictions = (final_probs >= threshold).astype(int)
+        f1 = f1_score(all_labels, predictions)
+        f1_scores.append(f1)
+        if f1 > best_f1:
+            best_f1 = f1
+            best_threshold_f1 = threshold
+
+    _, fpr, tpr, tnr, fnr, _, _, _, _, _, _, _ = evaluate_all_results(all_labels, final_probs)
+    return {
+        "AUC-ROC": auc_score,
+        "Best F1-Score": best_f1,
+        "Best Threshold (AUC)": best_threshold_auc,
+        "Best Threshold (F1)": best_threshold_f1,
+        'f1_scores': f1_scores,
+        'all_probs': final_probs,
+        'all_labels': all_labels,
+        'fpr': fpr,
+        'tpr': tpr,
+        'fnr': fnr,
+        'thresholds': thresholds,
+        # se repiten para integrar rapido con funciones anteriores... unificar en el futuro
+        'auc_score': auc_score,
+        'best_threshold_f1': best_threshold_f1,
+        'best_f1': best_f1,
+        'fold_idx': fold_idx + 1
+    }
+
+
+def test_model_multi(path_models, model_code, feats_code, tf, tp, bin_size, split_code):
+    freq = 32
+    data_path_resampled = './dataset_resampled/'
+    ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     folds_metrics = []
     # Pasos
     # 1) Cargar conjunto de test
@@ -225,70 +354,58 @@ for mv in model_versions:
     # 3) Obtener métricas: auc_roc score, tpr, tfr, f1_score
     # 4) Obtener plots de distribución de métricas en diferentes thresholds (marcados por los que devuelve la función de scipy del auc-score)
 
-    load_data_fun = data_utils.load_data_to_dict  # All,: ACC x, y, z, BVP, EDA, AGGObs, si mv 1 no aggObsr
-    data_dict = load_data_fun(ds_path)
+    data_dict = data_utils.load_data_to_dict_multi (ds_path)
+    model_fun, features_fun, dataloader_fun, train_fun, retrain_fun = train.set_model_multi(model_code)
+    load_data_fun, model_fun, EEG_channels = train.set_features_multi(feats_code, model_fun)
+    PDM = False
     num_folds = 5
     folds = train.generate_user_kfolds(data_dict, k=num_folds)
-    tp, tf, stride, bin_size = tp, tf, 15, 15
-    print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
+    labels_list = ['SIB', 'AGG', 'ED']
+    all_probs_models = {"SIB": [], "AGG": [], "ED": []}
+    print(f'model_code: {model_code}, tp: {tp}, tf: {tf}, feats_code: {feats_code}, split_code: {split_code} bin_size: {bin_size}.')
     for fold_idx, (train_uids, test_uids) in enumerate(folds):
         print(f"Fold {fold_idx + 1}:")
         print(f"  Train UIDs: {train_uids}")
         print(f"  Test UIDs: {test_uids}")
-
         # Obtener particiones de test en funcion de los ids del fold
-        _, _, test_dict, _ = train.get_partitions_from_fold(data_dict, train_uids, test_uids, seed=1)  # same seed as in train
-        features_fun, dataloader_fun = models_utils.get_dataloader(mv)
-        test_data = features_fun(test_dict, tp, tf, bin_size, freq)
+        _, _, test_dict, _ = train.get_partitions_from_fold(data_dict, train_uids, test_uids, split_code, PDM, seed=1)  # same seed as in train
+        test_data = features_fun(test_dict, bin_size, freq)
         batch_size = 128
-        dataloader_test = train.create_dataloader(dataloader_fun, test_data, tp, bin_size, batch_size, shuffle=False)
 
         # create model
         num_sequences = tp // bin_size
         bin_size = 15
         eegnet_params = {
-            'num_electrodes': 5,  # (EDA, ACC_X, ACC_Y, ACC_Z, BVP) ...
+            'num_electrodes': EEG_channels,  # (EDA, ACC_X, ACC_Y, ACC_Z, BVP) ...
             'chunk_size': tp * freq // num_sequences  # muestras en cada ventana
         }
         lstm_hidden_dim = 64
         num_classes = 1
 
-        model_path = f'./models/mv{mv}_f{feat_code}_tf{tf}_tp{tp}_fold{fold_idx}_model.pth'
-        print(f"Evaluando modelo {model_path}")
-        model = models_utils.load_model(mv, device, eegnet_params, lstm_hidden_dim, model_path, feat_code)
-        all_probs, all_labels = models_utils.test_model(model, dataloader_test, device)
-        auc_score, fpr, tpr, tnr, fnr, best_f1, best_threshold_f1, thresholds, f1_scores, best_threshold_roc, best_fpr_at_auc, best_tpr_at_auc = evaluate_all_results(
-            all_labels, all_probs)
+        for label_type in labels_list:
+            path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_fold{fold_idx}_label{label_type}_model.pth"
+            model = models_utils.load_model(model_code, device, eegnet_params, lstm_hidden_dim, path_model)
+            print(f"Evaluando modelo {path_model}")
+            dataloader_test = train.create_dataloader_multi(dataloader_fun, test_data, label_type, tp, tf, bin_size,
+                                                            batch_size,
+                                                            shuffle=False)
+            all_probs, all_labels = models_utils.test_model(model, dataloader_test, device)
+            all_probs_models[label_type].append(all_probs)
+        results_dict = evaluate_ensemble_results_multi(all_labels, all_probs_models[labels_list[0]][fold_idx], all_probs_models[labels_list[1]][fold_idx],
+                                        all_probs_models[labels_list[2]][fold_idx], fold_idx)
 
-        print(f"Fold {fold_idx} - AUC: {auc_score:.4f}, Best F1: {best_f1:.4f}")
-
-        #plot_combined_metrics(all_labels, all_probs, fpr, tpr, tnr, fnr, thresholds, f1_scores, auc_score, best_f1,
-        #                      best_threshold_f1)
-
-        folds_metrics.append({
-            'fpr': fpr,
-            'tpr': tpr,
-            'fnr': fnr,
-            'thresholds': thresholds,
-            'auc_score': auc_score,
-            'fold_idx': fold_idx + 1,
-            'best_threshold_f1': best_threshold_f1,
-            'best_f1': best_f1,
-            'f1_scores': f1_scores,
-            'all_probs': all_probs,
-            'all_labels': all_labels
-        })
+        folds_metrics.append(results_dict)
 
     '''
-    #plot_five_folds_metrics(folds_metrics)
+    plot_five_folds_metrics(folds_metrics)
     plot_five_folds_rates(folds_metrics)
     plot_f1_scores(folds_metrics)
     '''
     path_analysis_results = './results_analysis/'
-    path_results = f"{path_analysis_results}PM_mv{mv}_f{feat_code}_tf{tf}_tp{tp}_probability_distribution.png"
+    path_results = f"{path_analysis_results}PM_multi_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_probability_distribution.png"
     # Análisis para todos los folds
     plot_distribution_all_folds(folds_metrics, path_results)
-    path_results = f"{path_analysis_results}PM_mv{mv}_f{feat_code}_tf{tf}_tp{tp}_tpr_vs_fpr.png"
+    path_results = f"{path_analysis_results}PM_multi_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_tpr_vs_fpr.png"
     plot_tpr_vs_fpr_all_folds(folds_metrics, path_results)
-    path_results = f"{path_analysis_results}PM_mv{mv}_f{feat_code}_tf{tf}_tp{tp}_combined_metrics.png"
+    path_results = f"{path_analysis_results}PM_multi_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_combined_metrics.png"
     plot_combined_metrics(folds_metrics, path_results)
