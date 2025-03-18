@@ -100,7 +100,6 @@ def load_data_to_dict_ACC(path):
     return data_dict
 
 
-
 def load_data_to_dict_BVP(path):
     df = pd.read_csv(path, dtype={'SubjectID': str, 'SessionID': str})
     #df = df[['SubjectID', 'SessionID', 'Timestamp','EDA', 'ACC_X', 'ACC_Y', 'ACC_Z', 'BVP', 'AGG', 'ED', 'SIB', 'Condition']]
@@ -159,9 +158,9 @@ def load_orig_data_dict(base_path = './dataset'):
             if file.endswith('.csv'):
                 file_path = os.path.join(root, file)
                 parts = file.split('_')
-                subject_id = parts[0]  # Identificación del sujeto (xxxx.xx)
-                session_id = parts[1].split('.')[0]  # Identificación de la sesión (xxxx.xx_xx)
-                signal_type = parts[2].split('.')[0]  # Tipo de señal (ACC, BVP, EDA)
+                subject_id = parts[0]  #  sujeto (xxxx.xx)
+                session_id = parts[1].split('.')[0]  # session (xxxx.xx_xx)
+                signal_type = parts[2].split('.')[0]  # signal (ACC, BVP, EDA)
                 data = pd.read_csv(file_path)
                 if subject_id not in subject_data:
                     subject_data[subject_id] = {}
@@ -211,8 +210,7 @@ def get_features_from_dic_prevLabels_bins(data_dict, tp=60, tf=180, bin_size=15,
 
 
 def get_features_from_dict_bins(data_dict, tp=60, tf=180, bin_size=15, freq=32):
-    # Calculate the size of one observation bin and the prediction window in terms of datapoints
-    win_size = bin_size * freq  # Observation bin size in number of datapoints
+    win_size = bin_size * freq
     output_dict = {}
     for main_key, sub_dict in data_dict.items():
         if main_key not in output_dict:
@@ -222,26 +220,24 @@ def get_features_from_dict_bins(data_dict, tp=60, tf=180, bin_size=15, freq=32):
                 output_dict[main_key][sub_key] = {}
             df_subject = data_dict[main_key][sub_key]
             #print(f"key: {main_key}-{sub_key}, num. values in session: {len(df_subject)}")
-            counter = 0 # Counter to keep track of the current bin
+            counter = 0 # counter to keep track of the current bin
             windows_list = []
             labels_list = []
             agg_observed_list = []
-            # Calculate the endpoint of the next window
+            # calculate the endpoint of the next window
             next_limit = counter * win_size + win_size
-            # Loop to extract bins until the end of the session
             while (next_limit < len(df_subject)):
-                init_win_f = (counter * win_size)  # Start of the current observation bin
-                end_win_f = init_win_f + win_size  # End of the current observation bin
-                init_win_l = end_win_f  # Start of the prediction window
-                end_win_l = init_win_l + win_size  # End of the prediction window
-                # Extract data for the observation bin
+                init_win_f = (counter * win_size)  # start of the current observation bin
+                end_win_f = init_win_f + win_size  # end of the current observation bin
+                init_win_l = end_win_f  # start of the prediction window
+                end_win_l = init_win_l + win_size  # end of the prediction window
+                # extract data for the observation bin
                 window_data = df_subject.iloc[init_win_f:end_win_f]
-                # Determine the maximum aggression value in the observation bin
+                # determine the maximum aggression value in the observation bin
                 agg_observed = window_data.Condition.max()
                 agg_observed_list.append(agg_observed)
                 win_features = window_data.drop(columns=['Condition'])
                 windows_list.append(win_features)
-                # Increment the bin counter and update the endpoint of the next window
                 counter += 1
                 next_limit = counter * win_size + win_size
                 #print(f"Window: {counter}, added win_f: [{init_win_f}, {end_win_f}], win_l: [{init_win_l}, {end_win_l}]")
@@ -253,8 +249,7 @@ def get_features_from_dict_bins(data_dict, tp=60, tf=180, bin_size=15, freq=32):
 
 
 def get_features_from_dict_bins_multi(data_dict, bin_size=15, freq=32):
-    # Calculate the size of one observation bin and the prediction window in terms of datapoints
-    win_size = bin_size * freq  # Observation bin size in number of datapoints
+    win_size = bin_size * freq
     output_dict = {}
     for main_key, sub_dict in data_dict.items():
         if main_key not in output_dict:
@@ -264,20 +259,19 @@ def get_features_from_dict_bins_multi(data_dict, bin_size=15, freq=32):
                 output_dict[main_key][sub_key] = {}
             df_subject = data_dict[main_key][sub_key]
             #print(f"key: {main_key}-{sub_key}, num. values in session: {len(df_subject)}")
-            counter = 0 # Counter to keep track of the current bin
+            counter = 0 # counter to keep track of the current bin
             windows_list = []
             labels_sib_list = []
             labels_agg_list = []
             labels_ed_list = []
-            # Calculate the endpoint of the next window
+            # calculate the endpoint of the next window
             next_limit = counter * win_size + win_size
-            # Loop to extract bins until the end of the session
             while (next_limit <= len(df_subject)):
-                init_win_f = (counter * win_size)  # Start of the current observation bin
-                end_win_f = init_win_f + win_size  # End of the current observation bin
-                # Extract data for the observation bin
+                init_win_f = (counter * win_size)  # start of the current observation bin
+                end_win_f = init_win_f + win_size  # end of the current observation bin
+
                 window_data = df_subject.iloc[init_win_f:end_win_f]
-                # Determine the maximum aggression value in the observation bin for each label
+                # determine the maximum aggression value in the observation bin for each label
                 sib_label = window_data['SIB'].max()
                 agg_label = window_data['AGG'].max()
                 ed_label = window_data['ED'].max()
@@ -349,10 +343,8 @@ def get_features_from_dic_aggBehavior_wins(data_dict, tp=60, tf=180, stride=15, 
 
 
 def get_features_from_dic_aggBehavior_wins_fixed(data_dict, tp=60, tf=180, stride=15, freq=32):
-    # Calculate the size of the observation window and the prediction window
-    win_size = tp * freq # Observation window size in datapoints
-    label_size = tf * freq # Prediction window size in datapoints
-    # Calculate the stride size in datapoints
+    win_size = tp * freq # observation window size in datapoints
+    label_size = tf * freq # prediction window size in datapoints
     stride_size = stride * freq
     output_dict = {}
     for main_key, sub_dict in data_dict.items():
@@ -363,27 +355,27 @@ def get_features_from_dic_aggBehavior_wins_fixed(data_dict, tp=60, tf=180, strid
                 output_dict[main_key][sub_key] = {}
             df_subject = data_dict[main_key][sub_key]
             #print(f"key: {main_key}-{sub_key}, num. values in session: {len(df_subject)}")
-            counter = 0 # Counter to keep track of the current window
+            counter = 0 # counter to keep track of the current window
             windows_list = []
             final_labels_list = []
             agg_observed_list = []
-            # Calculate the endpoint of the next prediction window
+            # calculate the endpoint of the next prediction window
             next_limit = (counter * stride_size) + win_size + label_size
             while (next_limit < len(df_subject)):
-                init_win_f = (counter * stride_size)  # Start of the observation window
-                end_win_f = init_win_f + win_size  # End of the observation window
-                init_win_l = end_win_f  # Start of the prediction window
-                end_win_l = init_win_l + label_size  # End of the prediction window
+                init_win_f = (counter * stride_size)  # start of the observation window
+                end_win_f = init_win_f + win_size  # end of the observation window
+                init_win_l = end_win_f  # start of the prediction window
+                end_win_l = init_win_l + label_size  # end of the prediction window
                 window_data = df_subject.iloc[init_win_f:end_win_f]
-                # Determine is there was an aggresive episode in the observation window
+                # determine is there was an aggresive episode in the observation window
                 agg_observed = window_data.Condition.max()
                 agg_observed_list.append(agg_observed)
                 win_features = window_data.drop(columns=['Condition'])
                 windows_list.append(win_features)
-                # Determine is there was an aggresive episode in the prediction window
+                # determine is there was an aggresive episode in the prediction window
                 labels_df = df_subject.iloc[init_win_l:end_win_l]['Condition'].max()
                 final_labels_list.append(labels_df)
-                # Increment the window counter and update the endpoint of the next prediction window
+                # increment the window counter and update the endpoint of the next prediction window
                 counter += 1
                 next_limit = (counter * stride_size) + win_size + label_size
                 #print(f"Window: {counter}, added win_f: [{init_win_f}, {end_win_f}], win_l: [{init_win_l}, {end_win_l}]")
@@ -434,8 +426,6 @@ def split_data_per_session(data_dict, train_ratio=0.8):
 
 
 def new_split_data_per_session(data_dict, train_ratio=0.8):
-    # data_dict (dict): Diccionario con datos organizados por usuario y sesión.
-    # train_ratio (float): Proporción de datos para el conjunto de entrenamiento
     train_dict = {}
     test_dict = {}
     for user, sessions in data_dict.items():
@@ -655,6 +645,41 @@ class New_AggressiveBehaviorDatasetBin_AGGObserved(Dataset):
 
     def __getitem__(self, idx):
         return self.data[idx], self.aggObs[idx], self.labels[idx]
+
+
+class New_AggressiveBehaviorDatasetBin_AGGObserved_optimized(Dataset):
+    def __init__(self, data_dict, tp=15, tf=15, bin_size=15):
+        self.data_dict = data_dict
+        self.sequence_size = tp // bin_size  # number of past bins
+        self.prediction_bins = tf // bin_size  # number of prediction bins
+        self.index_map = []  # store indices instead of full tensors
+        for user, sessions in data_dict.items():
+            for session, session_data in sessions.items():
+                features = session_data['features']
+                labels = session_data['labels']
+                num_samples = len(features) - self.sequence_size - self.prediction_bins + 1
+                for i in range(num_samples):
+                    self.index_map.append((user, session, i))
+        print(f"Dataset initialized with {len(self.index_map)} samples.")
+
+    def __len__(self):
+        return len(self.index_map)
+
+    def __getitem__(self, idx):
+        user, session, i = self.index_map[idx]
+        session_data = self.data_dict[user][session]
+        features = session_data['features']
+        labels = session_data['labels']
+        # get the signal values for each bin within the observation window (t-tp, t)
+        windows = features[i:i + self.sequence_size]
+        data_tensor = torch.stack([torch.tensor(window.values.T, dtype=torch.float32) for window in windows])
+        # check if there was an aggressive episode within the bins (aggObs)
+        win_labels = labels[i:i + self.sequence_size]
+        aggObsr_tensor = torch.tensor(win_labels, dtype=torch.float32)
+        # check if there was an aggressive episode in the prediction interval (t, t+tf)
+        prediction_labels = labels[i + self.sequence_size:i + self.sequence_size + self.prediction_bins]
+        label_tensor = torch.tensor(np.max(prediction_labels), dtype=torch.float32)
+        return data_tensor, aggObsr_tensor, label_tensor
 
 
 class New_AggressiveBehaviorDatasetBin_AGGObserved_multi(Dataset):

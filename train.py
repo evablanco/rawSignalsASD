@@ -1,3 +1,4 @@
+import time
 import torch
 import numpy as np
 from sklearn.utils.class_weight import compute_class_weight
@@ -43,7 +44,7 @@ def evaluate_val_auc_model_aGGObs(model, test_dataloader, device):
                 probs = probs.unsqueeze(0)
             all_probs.extend(probs.cpu().numpy())
             all_labels.extend(batch_labels.cpu().numpy())
-    neg_samples = np.sum(all_labels)
+    #neg_samples = np.sum(all_labels)
     return roc_auc_score(all_labels, all_probs)
 
 
@@ -184,13 +185,33 @@ def train_model(model, train_dataloader, val_dataloader, num_epochs, device):
     return final_epochs
 
 
+def compute_class_weights(train_dataloader):
+    positive_count = 0
+    negative_count = 0
+    for _, _, labels in train_dataloader:
+        labels_flat = labels.numpy().flatten().astype(int)
+        positive_count += np.sum(labels_flat)
+        negative_count += len(labels_flat) - np.sum(labels_flat)
+    total_samples = positive_count + negative_count
+    class_weights = compute_class_weight(
+        class_weight='balanced',
+        classes=np.array([0, 1]),
+        #y=np.array([0] * negative_count + [1] * positive_count)
+        y=np.concatenate(([0] * negative_count, [1] * positive_count))
+    )
+    class_weights_dict = {0: class_weights[0], 1: class_weights[1]}
+    print(f'Total samples analyzed: {total_samples}')
+    print('Computed class weights:', class_weights_dict)
+    return class_weights_dict
 
-def train_model_AGGObs(model, train_dataloader, val_dataloader, num_epochs, device):
+
+def train_model_AGGObs(model, train_dataloader, val_dataloader, num_epochs, device, test_dataloader=None):
     for batch_features, batch_aGGOBs, batch_labels in train_dataloader:
         print(f"Features: {batch_features.shape}")
         print(f"aGGObsr: {batch_aGGOBs.shape}")
         print(f"Labels: {batch_labels.shape}")
         break
+    '''
     # compute class weights
     labels_list = []
     for _, _, labels in train_dataloader:
@@ -205,6 +226,14 @@ def train_model_AGGObs(model, train_dataloader, val_dataloader, num_epochs, devi
         y=labels_list
     )
     class_weights_dict = dict(zip(np.unique(labels_list), class_weights))
+    print('class_weights_dict: ', class_weights_dict)
+    '''
+    print(model)
+    print(model.eeg_feature_dim)
+    start_time = time.time()
+    class_weights_dict = compute_class_weights(train_dataloader)
+    total_time = time.time() - start_time
+    print('Compute cw time... : ', total_time)
     print('class_weights_dict: ', class_weights_dict)
     positive_class_weight = class_weights_dict[1]
     pos_weight_tensor = torch.tensor([positive_class_weight]).to(device)
@@ -240,6 +269,10 @@ def train_model_AGGObs(model, train_dataloader, val_dataloader, num_epochs, devi
             break
 
     print("Train Done...")
+    if test_dataloader != None:
+        print('testing model at last epoch reached...')
+        auc_test = evaluate_val_auc_model_aGGObs(model, test_dataloader, device)
+        print('AUC test: ', auc_test)
     if counter_patience == patience:
         train_losses = train_losses[: -patience]
         final_epochs = len(train_losses)
@@ -265,7 +298,7 @@ def invalid_data_PDM(dataloader):
         labels_list.extend(labels_flat)
     labels_array = np.array(labels_list)
     print(f'Total samples: {len(labels_array)}, 0: {len(labels_array) - np.sum(labels_array)}, 1:{np.sum(labels_array)}')
-    #neg_samples = np.sum(labels_array)
+    #neg_samples = np.sum(labels_array) # TO-DO: guardar en constructor del dataset (tb para cw...)
     #classes = np.unique(labels_array)
     return (len(np.unique(labels_array)) != 2)
 
@@ -323,19 +356,17 @@ def retrain_model(model, train_dataloader, test_dataloader, num_epochs, device, 
 
 def retrain_model_aGGObs(model, train_dataloader, test_dataloader, num_epochs, device, exp_name, path_model):
     print('Retraining model...')
-    labels_list = []
-    for _, _, labels in train_dataloader:
-        labels_flat = labels.numpy().flatten()
-        labels_list.extend(labels_flat)
-    labels_array = np.array(labels_list)
-    print(
-        f'Total samples: {len(labels_array)}, 0: {len(labels_array) - np.sum(labels_array)}, 1:{np.sum(labels_array)}')
-    class_weights = compute_class_weight(
-        class_weight='balanced',
-        classes=np.unique(labels_list),
-        y=labels_list
-    )
-    class_weights_dict = dict(zip(np.unique(labels_list), class_weights))
+    for batch_features, batch_aGGOBs, batch_labels in train_dataloader:
+        print(f"Features: {batch_features.shape}")
+        print(f"aGGObsr: {batch_aGGOBs.shape}")
+        print(f"Labels: {batch_labels.shape}")
+        break
+    print(model)
+    print(model.eeg_feature_dim)
+    start_time = time.time()
+    class_weights_dict = compute_class_weights(train_dataloader)
+    total_time = time.time() - start_time
+    print('Compute cw time... : ', total_time)
     print('class_weights_dict: ', class_weights_dict)
     positive_class_weight = class_weights_dict[1]
     pos_weight_tensor = torch.tensor([positive_class_weight]).to(device)
@@ -389,7 +420,7 @@ def set_model(model_code):
     elif model_code == 2:
         model_fun = models.New_EEGNetLSTM_AGGObsr
         features_fun = data_utils.get_features_from_dict_bins
-        dataloader_fun = data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved
+        dataloader_fun = data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved_optimized #data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved
         train_fun = train_model_AGGObs
         retrain_fun = retrain_model_aGGObs
     else:
@@ -422,7 +453,6 @@ def generate_user_kfolds(data_dict, k=5):
         test_uids = [uids[i] for i in test_idx]
         folds.append((train_uids, test_uids))
     return folds
-
 
 
 def get_split_fun(split_code, PDM=False):
@@ -504,7 +534,7 @@ def set_features(feats_code, model_fun):
     return load_data_fun, model_fun, EEG_channels
 
 
-def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, seed=1):
+def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -515,7 +545,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
     #data_dict = dict(list(data_dict.items())[:20])
     num_folds = 5
     folds = generate_user_kfolds(data_dict, k=num_folds)
-    tp, tf, stride, bin_size = tp, tf, 15, 15
+    tp, tf, stride, bin_size = tp, tf, b_size, b_size
     print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
     final_results = []
     for fold_idx, (train_uids, test_uids) in enumerate(folds):
@@ -524,8 +554,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         print(f"  Test UIDs: {test_uids}")
         # Obtener particiones de train, val y test en funcion de los ids del fold
         train_dict, val_dict, test_dict, all_train_dict = get_partitions_from_fold(data_dict, train_uids, test_uids, split_code, False, seed)
-        # Dividir las sesiones de cada usuario en bins de 15 segundos y almacenar raw signals y etiquetas
-        # (variable binaria que indica la ocurrencia de un episodio agresivo en el bin)
+        # Dividir las sesiones de cada usuario en bins y almacenar raw signals y etiquetas
         train_data = features_fun(train_dict, tp, tf, bin_size, freq)
         val_data = features_fun(val_dict, tp, tf, bin_size, freq)
         test_data = features_fun(test_dict, tp, tf, bin_size, freq)
@@ -537,7 +566,6 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
 
         # create model
         num_sequences = tp // bin_size
-        bin_size = 15
         eegnet_params = {
             'num_electrodes': EEG_channels,  # (EDA, ACC_X, ACC_Y, ACC_Z, BVP) | (EDA, ACC_Norm, BVP) | ....
             'chunk_size': tp * freq // num_sequences  # muestras en cada ventana
@@ -547,7 +575,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
         num_epochs = 100
 
-        best_num_epochs = train_fun(model, dataloader, dataloader_val, num_epochs, device)
+        best_num_epochs = train_fun(model, dataloader, dataloader_val, num_epochs, device, test_dataloader=dataloader_test)
 
         final_model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
         all_train_data = features_fun(all_train_dict, tp, tf, bin_size, freq)
@@ -576,7 +604,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
 
 
 
-def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, seed=1):
+def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -587,7 +615,6 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
     data_dict = load_data_fun(ds_path)
     #data_dict = dict(list(data_dict.items())[:2])
     ##############################################
-    num_exps = 10 # TO-DO: configurar particones para cada exp!
     tp, tf, stride, bin_size = tp, tf, 15, 15
     print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
     final_results = []
@@ -646,8 +673,6 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
     path_to_save_results = f'{path_results}PDM_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_all_experiments_results.csv'
     final_results_df.to_csv(path_to_save_results, index=False)
     print("Results saved successfully.")
-
-
 
 
 def set_model_multi(model_code):
@@ -712,7 +737,7 @@ def evaluate_ensemble_results_multi(all_labels, probs_sib, probs_agg, probs_ed):
     }
 
 
-def start_exps_PM_multi(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, seed=1):
+def start_exps_PM_multi(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -737,11 +762,9 @@ def start_exps_PM_multi(tp, tf, freq, data_path_resampled, path_results, path_mo
         print(f"Fold {fold_idx + 1}:")
         print(f"  Train UIDs: {train_uids}")
         print(f"  Test UIDs: {test_uids}")
-
         # Obtener particiones de train, val y test en funcion de los ids del fold
         train_dict, val_dict, test_dict, all_train_dict = get_partitions_from_fold(data_dict, train_uids, test_uids, split_code, PDM, seed)
-        # Dividir las sesiones de cada usuario en bins de 15 segundos y almacenar raw signals y etiquetas
-        # (variable binaria que indica la ocurrencia de un episodio agresivo en el bin)
+        # Dividir las sesiones de cada usuario en bins y almacenar raw signals y etiquetas
         train_data = features_fun(train_dict, bin_size, freq)
         val_data = features_fun(val_dict, bin_size, freq)
         test_data = features_fun(test_dict, bin_size, freq)
@@ -749,11 +772,9 @@ def start_exps_PM_multi(tp, tf, freq, data_path_resampled, path_results, path_mo
 
         for label_type in labels_list:
             print(f"Training model for {label_type}")
-
             dataloader = create_dataloader_multi(dataloader_fun, train_data, label_type, tp, tf, bin_size, batch_size, shuffle=True)
             dataloader_val = create_dataloader_multi(dataloader_fun, val_data, label_type, tp, tf, bin_size, batch_size, shuffle=False)
             dataloader_test = create_dataloader_multi(dataloader_fun, test_data, label_type, tp, tf, bin_size, batch_size, shuffle=False)
-
             # create model
             num_sequences = tp // bin_size
             bin_size = 15
@@ -765,14 +786,12 @@ def start_exps_PM_multi(tp, tf, freq, data_path_resampled, path_results, path_mo
             num_classes = 1
             model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
             num_epochs = 100
-
             best_num_epochs = train_fun(model, dataloader, dataloader_val, num_epochs, device)
-
             final_model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
             all_train_data = features_fun(all_train_dict, bin_size, freq)
             dataloader_final = create_dataloader_multi(dataloader_fun, all_train_data, label_type, tp, tf, bin_size, batch_size, shuffle=True)
-
             path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_fold{fold_idx}_label{label_type}_model.pth"
+            print('eegnet params: ', eegnet_params)
             results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs, device, fold_idx,
                                   path_model)
             final_results[label_type].append(results)
