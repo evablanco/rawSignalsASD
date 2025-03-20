@@ -449,25 +449,29 @@ def analyse_subjects_data():
     ds_path = data_path_resampled + f"dataset_{freq}Hz.csv"
     data_dict = data_utils.load_data_to_dict(ds_path)
     subject_ids = list(data_dict.keys())
+
     total_episodes = []
     total_sessions = []
     mean_episodes_per_session = []
     mean_episode_duration = []
     total_duration_episodes = []
+
     def compute_episode_count_and_duration(condition_series, time_series):
         condition_series = condition_series.reset_index(drop=True)
-        time_series = pd.Series(time_series).reset_index(drop=True)
+        if isinstance(time_series, pd.DatetimeIndex):
+            time_series = time_series.to_series()
+        time_series = pd.Series(time_series)
+        time_series = pd.to_datetime(time_series)
         shifted = condition_series.shift(fill_value=0)
         episode_starts = (condition_series == 1) & (shifted == 0)
         episode_durations = []
-
         for start_idx in episode_starts[episode_starts].index:
             end_idx = start_idx
-            while end_idx < len(condition_series) and condition_series[end_idx] == 1:
+            while end_idx < len(condition_series) and condition_series.iloc[end_idx] == 1:
                 end_idx += 1
-            duration = (time_series[end_idx - 1] - time_series[start_idx]).total_seconds()
+            end_idx = min(end_idx, len(time_series) - 1)
+            duration = (time_series.iloc[end_idx] - time_series.iloc[start_idx]).total_seconds()
             episode_durations.append(duration)
-
         return len(episode_durations), np.sum(episode_durations) if episode_durations else 0
 
     for subject_id in subject_ids:
@@ -475,8 +479,8 @@ def analyse_subjects_data():
         num_episodes = 0
         num_sessions = len(subject_data)
         episodes_per_session = []
-        durations = []
         total_duration = 0
+
         for session_id, session_data in subject_data.items():
             session_data = session_data.sort_index()
             num_episodes_in_session, total_duration_in_session = compute_episode_count_and_duration(
@@ -484,28 +488,27 @@ def analyse_subjects_data():
             )
             num_episodes += num_episodes_in_session
             episodes_per_session.append(num_episodes_in_session)
-            durations.append(total_duration_in_session)
             total_duration += total_duration_in_session
+
         total_episodes.append(num_episodes)
         total_sessions.append(num_sessions)
-        mean_episodes_per_session.append(np.mean(episodes_per_session) if episodes_per_session else 0)
-        mean_episode_duration.append(np.mean(durations) if durations else 0)
-        total_duration_episodes.append(total_duration)
-
+        mean_episodes_per_session.append(num_episodes / num_sessions if num_sessions > 0 else 0)
+        mean_episode_duration.append((total_duration / num_episodes) / 60 if num_episodes > 0 else 0)
+        total_duration_episodes.append(total_duration / 60)
 
     analysis_df = pd.DataFrame({
         'Subject': subject_ids,
         'Total Episodes': total_episodes,
         'Total Sessions': total_sessions,
         'Mean Episodes per Session': np.round(mean_episodes_per_session, 2),
-        'Mean Episode Duration (min.)': np.round(np.array(mean_episode_duration) / 60, 2),
-        'Total Duration Episodes (min.)': np.round(np.array(total_duration_episodes) / 60, 2)
+        'Mean Episode Duration (min.)': np.round(mean_episode_duration, 2),
+        'Total Duration Episodes (min.)': np.round(total_duration_episodes, 2)
     })
 
     mean_values = analysis_df.iloc[:, 1:].mean().round(2)
     std_values = analysis_df.iloc[:, 1:].std().round(2)
-    summary_df = pd.DataFrame([np.round(mean_values, 2), np.round(std_values, 2)])
-    summary_df.insert(0, 'Subject', ['Mean', 'STD'])  # Add identifier to first column
+    summary_df = pd.DataFrame([mean_values, std_values])
+    summary_df.insert(0, 'Subject', ['Mean', 'STD'])
     analysis_df = pd.concat([analysis_df, summary_df], ignore_index=True)
 
     output_dir = "./results_analysis/"
@@ -514,6 +517,7 @@ def analyse_subjects_data():
     analysis_df.to_csv(output_path_csv, index=False)
 
     print(f"DataFrame saved at: {output_path_csv}")
+
 
 
 '''
@@ -560,3 +564,4 @@ resampled_data = pd.read_csv('./dataset_resampled/dataset_32Hz.csv', dtype={'Sub
 plot_subject_data(resampled_data, "4356.01", "01", start_seconds=0, interval_seconds=900)
 analyse_subjects_data()
 '''
+
