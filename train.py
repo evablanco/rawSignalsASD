@@ -1,4 +1,5 @@
 import time
+
 import torch
 import numpy as np
 from sklearn.utils.class_weight import compute_class_weight
@@ -11,6 +12,7 @@ import data_utils
 from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import KFold
+from sklearn.dummy import DummyClassifier
 
 
 def evaluate_val_auc_model(model, test_dataloader, device):
@@ -124,11 +126,12 @@ def evaluate_model_aGGObs(model, test_dataloader, device):
 
 
 
-def train_model(model, train_dataloader, val_dataloader, num_epochs, device):
+def train_model(model, train_dataloader, val_dataloader, num_epochs, cw_type, device, test_dataloader=None):
     for batch_features, batch_labels in train_dataloader:
         print(f"Features: {batch_features.shape}")
         print(f"Labels: {batch_labels.shape}")
         break
+    '''
     # compute class weights
     labels_list = []
     for _, labels in train_dataloader:
@@ -143,6 +146,15 @@ def train_model(model, train_dataloader, val_dataloader, num_epochs, device):
         y=labels_list
     )
     class_weights_dict = dict(zip(np.unique(labels_list), class_weights))
+    print('class_weights_dict: ', class_weights_dict)
+    positive_class_weight = class_weights_dict[1]
+    pos_weight_tensor = torch.tensor([positive_class_weight]).to(device)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
+    '''
+    start_time = time.time()
+    class_weights_dict = compute_class_weights(train_dataloader, cw_type)
+    total_time = time.time() - start_time
+    print('Compute cw time... : ', total_time)
     print('class_weights_dict: ', class_weights_dict)
     positive_class_weight = class_weights_dict[1]
     pos_weight_tensor = torch.tensor([positive_class_weight]).to(device)
@@ -177,6 +189,10 @@ def train_model(model, train_dataloader, val_dataloader, num_epochs, device):
             break
 
     print("Train Done...")
+    if test_dataloader != None:
+        print('testing model at last epoch reached...')
+        auc_test = evaluate_val_auc_model(model, test_dataloader, device)
+        print('AUC test: ', auc_test)
     if counter_patience == patience:
         train_losses = train_losses[: -patience]
         final_epochs = len(train_losses)
@@ -185,13 +201,26 @@ def train_model(model, train_dataloader, val_dataloader, num_epochs, device):
     return final_epochs
 
 
-def compute_class_weights(train_dataloader):
+def compute_class_weights_balanced(train_dataloader):
+    """
+    Computes class weights efficiently without loading all data into memory.
+    """
+
     positive_count = 0
     negative_count = 0
-    for _, _, labels in train_dataloader:
-        labels_flat = labels.numpy().flatten().astype(int)
-        positive_count += np.sum(labels_flat)
-        negative_count += len(labels_flat) - np.sum(labels_flat)
+
+    first_batch = next(iter(train_dataloader))
+    if len(first_batch) != 3:
+        for _, labels in train_dataloader:
+            labels_flat = labels.numpy().flatten().astype(int)
+            positive_count += np.sum(labels_flat)
+            negative_count += len(labels_flat) - np.sum(labels_flat)
+    else:
+        for _, _, labels in train_dataloader:
+            labels_flat = labels.numpy().flatten().astype(int)
+            positive_count += np.sum(labels_flat)
+            negative_count += len(labels_flat) - np.sum(labels_flat)
+
     total_samples = positive_count + negative_count
     class_weights = compute_class_weight(
         class_weight='balanced',
@@ -199,13 +228,65 @@ def compute_class_weights(train_dataloader):
         #y=np.array([0] * negative_count + [1] * positive_count)
         y=np.concatenate(([0] * negative_count, [1] * positive_count))
     )
+
     class_weights_dict = {0: class_weights[0], 1: class_weights[1]}
+
     print(f'Total samples analyzed: {total_samples}')
     print('Computed class weights:', class_weights_dict)
+
     return class_weights_dict
 
 
-def train_model_AGGObs(model, train_dataloader, val_dataloader, num_epochs, device, test_dataloader=None):
+
+def compute_class_weights_onset(train_dataloader):
+    """
+    Computes class weights using only 'new' positive samples (where aggression indicator a == 0 and label y == 1)
+    and treating all other samples as negatives.
+    Assumes each batch from train_dataloader returns (data, aggression, labels) where 'agg' has a shape of
+    (batch_size, Nbins) and 'labels' has a shape of (batch_size,).
+
+    The strategy is to use the aggression indicator from the first bin for each sample.
+    """
+    positive_count = 0
+    negative_count = 0
+
+    for data, agg, labels in train_dataloader:
+        labels_flat = labels.cpu().numpy().flatten().astype(int)
+        agg_array = agg.cpu().numpy().reshape(labels.size(0), -1).astype(int)
+        agg_sample = agg_array[:, 0]
+
+        new_positive = np.sum((labels_flat == 1) & (agg_sample == 0))
+        batch_size = len(labels_flat)
+        positive_count += new_positive
+        negative_count += (batch_size - new_positive)
+
+    total_samples = positive_count + negative_count
+
+    y_combined = np.concatenate(([0] * negative_count, [1] * positive_count))
+
+    class_weights = compute_class_weight(
+        class_weight='balanced',
+        classes=np.array([0, 1]),
+        y=y_combined
+    )
+    class_weights_dict = {0: class_weights[0], 1: class_weights[1]}
+
+    print(f'Total samples analyzed: {total_samples}')
+    print('Computed class weights (applied only to new positives):', class_weights_dict)
+
+    return class_weights_dict
+
+
+def compute_class_weights(train_dataloader, cw_type):
+    print('cw_type: ', cw_type)
+    if cw_type == 0 or cw_type == 1:
+        class_weights_dict = compute_class_weights_balanced(train_dataloader)
+    elif cw_type == 2: ### solo con model_version >= 2, sino falla...
+        class_weights_dict = compute_class_weights_onset(train_dataloader)
+    return class_weights_dict
+
+
+def train_model_AGGObs_prev(model, train_dataloader, val_dataloader, num_epochs, cw_type, device, test_dataloader=None):
     for batch_features, batch_aGGOBs, batch_labels in train_dataloader:
         print(f"Features: {batch_features.shape}")
         print(f"aGGObsr: {batch_aGGOBs.shape}")
@@ -231,7 +312,7 @@ def train_model_AGGObs(model, train_dataloader, val_dataloader, num_epochs, devi
     print(model)
     print(model.eeg_feature_dim)
     start_time = time.time()
-    class_weights_dict = compute_class_weights(train_dataloader)
+    class_weights_dict = compute_class_weights(train_dataloader, cw_type)
     total_time = time.time() - start_time
     print('Compute cw time... : ', total_time)
     print('class_weights_dict: ', class_weights_dict)
@@ -240,7 +321,7 @@ def train_model_AGGObs(model, train_dataloader, val_dataloader, num_epochs, devi
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
     optimizer = Adam(model.parameters(), lr=0.001)
     best_auc = 0
-    patience = 10
+    patience = 5 #### antes 10!
     counter_patience = 0
     train_losses = []
     for epoch in range(num_epochs):
@@ -281,6 +362,78 @@ def train_model_AGGObs(model, train_dataloader, val_dataloader, num_epochs, devi
     return final_epochs
 
 
+def train_model_AGGObs(model, train_dataloader, val_dataloader, num_epochs, cw_type, device, test_dataloader=None):
+    for batch_features, batch_aGGOBs, batch_labels in train_dataloader:
+        print(f"Features: {batch_features.shape}")
+        print(f"aGGObsr: {batch_aGGOBs.shape}")
+        print(f"Labels: {batch_labels.shape}")
+        break
+    print(model)
+    print(model.eeg_feature_dim)
+    start_time = time.time()
+    class_weights_dict = compute_class_weights(train_dataloader, cw_type)
+    total_time = time.time() - start_time
+    print('Compute cw time... : ', total_time)
+    print('class_weights_dict: ', class_weights_dict)
+    positive_class_weight = class_weights_dict[1]
+    pos_weight_tensor = torch.tensor([positive_class_weight]).to(device)
+
+    if cw_type <= 1:
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
+    else:
+        criterion = nn.BCEWithLogitsLoss(reduction='none')
+
+    optimizer = Adam(model.parameters(), lr=0.001)
+    best_auc = 0
+    patience = 5 #### antes 10!
+    counter_patience = 0
+    train_losses = []
+    for epoch in range(num_epochs):
+        model.train()
+        total_loss = 0
+        for batch_features, batch_aGGObs, batch_labels in train_dataloader:
+            batch_features = batch_features.to(device)
+            batch_aGGObs = batch_aGGObs.to(device)
+            batch_labels = batch_labels.to(device).float()
+            optimizer.zero_grad()
+            predictions = model(batch_features, batch_aGGObs)
+            if cw_type > 1:
+                loss_per_sample = criterion(predictions, batch_labels)
+                agg_sample = batch_aGGObs[:, -1]  # use the aggression indicator from the last bin for each sample
+                weights = torch.ones_like(batch_labels)
+                weights[(batch_labels == 1) & (agg_sample == 0)] = positive_class_weight
+                loss = (loss_per_sample * weights).mean()
+            else:
+                loss = criterion(predictions, batch_labels)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        auc_val = evaluate_val_auc_model_aGGObs(model, val_dataloader, device)
+        print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(train_dataloader):.4f}, Val auc: {auc_val}")
+        train_losses.append(total_loss / len(train_dataloader))
+        if auc_val > best_auc:
+            best_auc = auc_val
+            counter_patience = 0
+        else:
+            print('Val auc does not improve...')
+            counter_patience += 1
+        if counter_patience == patience:
+            break
+
+    print("Train Done...")
+    if test_dataloader != None:
+        print('testing model at last epoch reached...')
+        auc_test = evaluate_val_auc_model_aGGObs(model, test_dataloader, device)
+        print('AUC test: ', auc_test)
+    if counter_patience == patience:
+        train_losses = train_losses[: -patience]
+        final_epochs = len(train_losses)
+    else:
+        final_epochs = num_epochs
+    return final_epochs
+
+
+
 def invalid_data(dataloader):
     labels_list = []
     for _, labels in dataloader:
@@ -298,13 +451,14 @@ def invalid_data_PDM(dataloader):
         labels_list.extend(labels_flat)
     labels_array = np.array(labels_list)
     print(f'Total samples: {len(labels_array)}, 0: {len(labels_array) - np.sum(labels_array)}, 1:{np.sum(labels_array)}')
-    #neg_samples = np.sum(labels_array) # TO-DO: guardar en constructor del dataset (tb para cw...)
+    #neg_samples = np.sum(labels_array)
     #classes = np.unique(labels_array)
     return (len(np.unique(labels_array)) != 2)
 
 
-def retrain_model(model, train_dataloader, test_dataloader, num_epochs, device, exp_name, path_model):
+def retrain_model(model, train_dataloader, test_dataloader, num_epochs, cw_type, device, exp_name, path_model):
     print('Retraining model...')
+    '''
     labels_list = []
     for _, labels in train_dataloader:
         labels_flat = labels.numpy().flatten()
@@ -318,6 +472,15 @@ def retrain_model(model, train_dataloader, test_dataloader, num_epochs, device, 
         y=labels_list
     )
     class_weights_dict = dict(zip(np.unique(labels_list), class_weights))
+    print('class_weights_dict: ', class_weights_dict)
+    positive_class_weight = class_weights_dict[1]
+    pos_weight_tensor = torch.tensor([positive_class_weight]).to(device)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
+    '''
+    start_time = time.time()
+    class_weights_dict = compute_class_weights(train_dataloader, cw_type)
+    total_time = time.time() - start_time
+    print('Compute cw time... : ', total_time)
     print('class_weights_dict: ', class_weights_dict)
     positive_class_weight = class_weights_dict[1]
     pos_weight_tensor = torch.tensor([positive_class_weight]).to(device)
@@ -354,7 +517,7 @@ def retrain_model(model, train_dataloader, test_dataloader, num_epochs, device, 
     return results
 
 
-def retrain_model_aGGObs(model, train_dataloader, test_dataloader, num_epochs, device, exp_name, path_model):
+def retrain_model_aGGObs(model, train_dataloader, test_dataloader, num_epochs, cw_type, device, exp_name, path_model):
     print('Retraining model...')
     for batch_features, batch_aGGOBs, batch_labels in train_dataloader:
         print(f"Features: {batch_features.shape}")
@@ -364,13 +527,18 @@ def retrain_model_aGGObs(model, train_dataloader, test_dataloader, num_epochs, d
     print(model)
     print(model.eeg_feature_dim)
     start_time = time.time()
-    class_weights_dict = compute_class_weights(train_dataloader)
+    class_weights_dict = compute_class_weights(train_dataloader, cw_type)
     total_time = time.time() - start_time
     print('Compute cw time... : ', total_time)
     print('class_weights_dict: ', class_weights_dict)
     positive_class_weight = class_weights_dict[1]
     pos_weight_tensor = torch.tensor([positive_class_weight]).to(device)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
+
+    if cw_type <= 1:
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
+    else:
+        criterion = nn.BCEWithLogitsLoss(reduction='none')
+
     optimizer = Adam(model.parameters(), lr=0.001)
     train_losses = []
     for epoch in range(num_epochs):
@@ -382,7 +550,16 @@ def retrain_model_aGGObs(model, train_dataloader, test_dataloader, num_epochs, d
             batch_labels = batch_labels.to(device).float()
             optimizer.zero_grad()
             predictions = model(batch_features, batch_aGGObs)
-            loss = criterion(predictions, batch_labels)
+
+            if cw_type > 1:
+                loss_per_sample = criterion(predictions, batch_labels)
+                agg_sample = batch_aGGObs[:, -1]  # use the aggression indicator from the last bin for each sample
+                weights = torch.ones_like(batch_labels)
+                weights[(batch_labels == 1) & (agg_sample == 0)] = positive_class_weight
+                loss = (loss_per_sample * weights).mean()
+            else:
+                loss = criterion(predictions, batch_labels)
+
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -390,6 +567,22 @@ def retrain_model_aGGObs(model, train_dataloader, test_dataloader, num_epochs, d
         train_losses.append(total_loss / len(train_dataloader))
 
     torch.save(model.state_dict(), path_model)
+    f1_s, best_th, best_f1, auc_roc_s = evaluate_model_aGGObs(model, test_dataloader, device)
+    print(f'Test results: f1_s: {f1_s}, best_th: {best_th}, best_f1: {best_f1}, auc: {auc_roc_s}.')
+    print('')
+    results = {
+        "Fold": exp_name,
+        "F1-Score": f1_s,
+        'Best_F1-score': best_f1,
+        'Best_th': best_th,
+        "AUC-ROC": auc_roc_s,
+        "Num_epochs": num_epochs
+    }
+    return results
+
+
+def test_trained_model_aGGObs(model, test_dataloader, num_epochs, device, exp_name):
+    print('Testing trained model...')
     f1_s, best_th, best_f1, auc_roc_s = evaluate_model_aGGObs(model, test_dataloader, device)
     print(f'Test results: f1_s: {f1_s}, best_th: {best_th}, best_f1: {best_f1}, auc: {auc_roc_s}.')
     print('')
@@ -415,12 +608,50 @@ def set_model(model_code):
         model_fun = models.New_EEGNetLSTM
         features_fun = data_utils.get_features_from_dict_bins
         dataloader_fun = data_utils.New_AggressiveBehaviorDatasetBin
+        ### label only as positive onset: New_AggressiveBehaviorDatasetBin_only_onset
         train_fun = train_model
         retrain_fun = retrain_model
     elif model_code == 2:
         model_fun = models.New_EEGNetLSTM_AGGObsr
         features_fun = data_utils.get_features_from_dict_bins
-        dataloader_fun = data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved_optimized #data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved
+        dataloader_fun = data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved #data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved
+        # No optimizado: data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved
+        # Optimizado par menores bin sizes: data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved_optimized
+        # label only as positive onset: New_AggressiveBehaviorDatasetBin_AGGObserved_only_onset
+        train_fun = train_model_AGGObs
+        retrain_fun = retrain_model_aGGObs
+    elif model_code == 3: ### to-do: unificar, ahora quick testing...
+        model_fun = models.New_EEGNetLSTM_AGGObsr_Simple_1
+        features_fun = data_utils.get_features_from_dict_bins
+        dataloader_fun = data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved  # data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved
+        # No optimizado: data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved
+        # Optimizado par menores bin sizes: data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved_optimized
+        # label only as positive onset: New_AggressiveBehaviorDatasetBin_AGGObserved_only_onset
+        train_fun = train_model_AGGObs
+        retrain_fun = retrain_model_aGGObs
+    elif model_code == 4: ### to-do: unificar, ahora quick testing...
+        model_fun = models.New_EEGNetLSTM_AGGObsr_Simple_2
+        features_fun = data_utils.get_features_from_dict_bins
+        dataloader_fun = data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved  # data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved
+        # No optimizado: data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved
+        # Optimizado par menores bin sizes: data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved_optimized
+        # label only as positive onset: New_AggressiveBehaviorDatasetBin_AGGObserved_only_onset
+        train_fun = train_model_AGGObs
+        retrain_fun = retrain_model_aGGObs
+    elif model_code == 6:
+        model_fun = models.New_EEGNetLSTM
+        features_fun = data_utils.get_features_from_dict_bins
+        dataloader_fun = data_utils.New_AggressiveBehaviorDatasetBin_only_onset
+        ### label only as positive onset: New_AggressiveBehaviorDatasetBin_only_onset
+        train_fun = train_model
+        retrain_fun = retrain_model
+    elif model_code == 5: ### to-do: unificar, ahora quick testing... ONLY ONSET SAMPLES AS POSITIVES!!!!!
+        model_fun = models.New_EEGNetLSTM_AGGObsr
+        features_fun = data_utils.get_features_from_dict_bins
+        dataloader_fun = data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved_only_onset  # data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved
+        # No optimizado: data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved
+        # Optimizado par menores bin sizes: data_utils.New_AggressiveBehaviorDatasetBin_AGGObserved_optimized
+        # label only as positive onset: New_AggressiveBehaviorDatasetBin_AGGObserved_only_onset
         train_fun = train_model_AGGObs
         retrain_fun = retrain_model_aGGObs
     else:
@@ -436,17 +667,8 @@ def create_dataloader(dataloader_fun, output_dict, tp, tf, bin_size, batch_size,
 
 
 def generate_user_kfolds(data_dict, k=5):
-    # Genera k particiones de los IDs de sujetos utilizando KFold
-    #Args:
-    #    data_dict (dict): Diccionario de datos organizado por usuario y sesión.
-    #    k (int): Número de pliegues para la validación cruzada.
-    #Returns: list: Lista de tuplas, donde cada tupla contiene dos listas (train_uids, test_uids) para cada fold.
-
-    # Extraer todos los SubjectIDs (uids) unicos del diccionario
     uids = list(data_dict.keys())
-    # Inicializar KFold
     kf = KFold(n_splits=k, shuffle=True, random_state=42)
-    # Generar particiones
     folds = []
     for train_idx, test_idx in kf.split(uids):
         train_uids = [uids[i] for i in train_idx]
@@ -534,7 +756,7 @@ def set_features(feats_code, model_fun):
     return load_data_fun, model_fun, EEG_channels
 
 
-def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, seed=1):
+def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, cw_type, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -554,7 +776,8 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         print(f"  Test UIDs: {test_uids}")
         # Obtener particiones de train, val y test en funcion de los ids del fold
         train_dict, val_dict, test_dict, all_train_dict = get_partitions_from_fold(data_dict, train_uids, test_uids, split_code, False, seed)
-        # Dividir las sesiones de cada usuario en bins y almacenar raw signals y etiquetas
+        # Dividir las sesiones de cada usuario en bins de 15 segundos y almacenar raw signals y etiquetas
+        # (variable binaria que indica la ocurrencia de un episodio agresivo en el bin)
         train_data = features_fun(train_dict, tp, tf, bin_size, freq)
         val_data = features_fun(val_dict, tp, tf, bin_size, freq)
         test_data = features_fun(test_dict, tp, tf, bin_size, freq)
@@ -575,14 +798,14 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
         num_epochs = 100
 
-        best_num_epochs = train_fun(model, dataloader, dataloader_val, num_epochs, device, test_dataloader=dataloader_test)
+        best_num_epochs = train_fun(model, dataloader, dataloader_val, num_epochs, cw_type, device, test_dataloader=dataloader_test)
 
         final_model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
         all_train_data = features_fun(all_train_dict, tp, tf, bin_size, freq)
         dataloader_final = create_dataloader(dataloader_fun, all_train_data, tp, tf, bin_size, batch_size, shuffle=True)
 
-        path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_fold{fold_idx}_model.pth"
-        results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs, device, fold_idx,
+        path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_cw{cw_type}_fold{fold_idx}_model.pth"
+        results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs, cw_type, device, fold_idx,
                               path_model)
         final_results.append(results)
 
@@ -598,13 +821,12 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         'Num_epochs': [avg_metrics['Num_epochs'], std_metrics['Num_epochs']]
     })
     final_results_df = pd.concat([results_df, summary_df], ignore_index=True)
-    path_to_save_results = f'{path_results}PM_SS_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_all_experiments_results_5cv.csv'
+    path_to_save_results = f'{path_results}PM_SS_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_cw{cw_type}_all_experiments_results_5cv.csv'
     final_results_df.to_csv(path_to_save_results, index=False)
     print("Results saved successfully.")
 
 
-
-def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, seed=1):
+def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, cw_type, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -615,7 +837,8 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
     data_dict = load_data_fun(ds_path)
     #data_dict = dict(list(data_dict.items())[:2])
     ##############################################
-    tp, tf, stride, bin_size = tp, tf, 15, 15
+    num_exps = 10 # TO-DO: configurar particones para cada exp!
+    tp, tf, stride, bin_size = tp, tf, b_size, b_size
     print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
     final_results = []
     num_users = len(list(data_dict.items()))
@@ -647,13 +870,13 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
             model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
             num_epochs = 100
 
-            best_num_epochs = train_fun(model, dataloader, dataloader_val, num_epochs, device)
+            best_num_epochs = train_fun(model, dataloader, dataloader_val, num_epochs, cw_type, device)
 
             final_model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
             #dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, bin_size, batch_size, shuffle=True)
 
-            path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_subj{key_subject}_model.pth"
-            results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs,
+            path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_cw{cw_type}_subj{key_subject}_model.pth"
+            results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs, cw_type,
                                   device, key_subject, path_model)
             final_results.append(results)
         data_dict.pop(next(iter(first_item)))
@@ -670,7 +893,202 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
         'Num_epochs': [avg_metrics['Num_epochs'], std_metrics['Num_epochs']]
     })
     final_results_df = pd.concat([results_df, summary_df], ignore_index=True)
-    path_to_save_results = f'{path_results}PDM_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_all_experiments_results.csv'
+    path_to_save_results = f'{path_results}PDM_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_cw{cw_type}_all_experiments_results.csv'
+    final_results_df.to_csv(path_to_save_results, index=False)
+    print("Results saved successfully.")
+
+
+def pretrain_model_for_HM(tp, tf, freq, data_dict, path_results, path_models, model_code, feats_code, split_code, b_size, cw_type, seed=1):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_fun, features_fun, dataloader_fun, train_fun, retrain_fun = set_model(model_code)
+    load_data_fun, model_fun, EEG_channels = set_features(feats_code, model_fun)
+    tp, tf, stride, bin_size = tp, tf, b_size, b_size
+    print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
+    split_fun = get_split_fun(split_code, True)
+    output_dict = features_fun(data_dict, tf, tp, bin_size, freq)
+    train_dict_, test_dict = split_fun(output_dict, train_ratio=0.8)
+    train_dict, val_dict = split_fun(train_dict_, train_ratio=0.8)
+    batch_size = 128
+    dataloader = create_dataloader(dataloader_fun, train_dict, tp, tf, bin_size, batch_size, shuffle=True)
+    dataloader_val = create_dataloader(dataloader_fun, val_dict, tp, tf, bin_size, batch_size, shuffle=False)
+    dataloader_test = create_dataloader(dataloader_fun, test_dict, tp, tf, bin_size, batch_size, shuffle=False)
+    dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, tf, bin_size, batch_size, shuffle=True)
+    # create model
+    num_sequences = tp // bin_size
+    eegnet_params = {
+        'num_electrodes': EEG_channels,  # (EDA, ACC_X, ACC_Y, ACC_Z, BVP) | (EDA, ACC_Norm, BVP) | ....
+        'chunk_size': tp * freq // num_sequences  # muestras en cada ventana
+    }
+    lstm_hidden_dim = 64
+    num_classes = 1
+    model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
+    num_epochs = 100
+    best_num_epochs = train_fun(model, dataloader, dataloader_val, num_epochs, cw_type, device, test_dataloader=dataloader_test)
+    final_model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
+    path_model = f"{path_models}temp_model.pth"
+    _ = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs, cw_type, device, 0, path_model)
+    return path_model
+
+
+def start_exps_HM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, cw_type, seed=1):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_fun, features_fun, dataloader_fun, train_fun, retrain_fun = set_model(model_code)
+    load_data_fun, model_fun, EEG_channels = set_features(feats_code, model_fun)
+    split_fun = get_split_fun(split_code, True)
+    ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
+    data_dict = load_data_fun(ds_path)
+    pretrain_data_dict = load_data_fun(ds_path)
+    tp, tf, stride, bin_size = tp, tf, b_size, b_size
+    print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
+    final_results = []
+    num_users = len(list(data_dict.items()))
+    invalid_users = []
+    for u in range(0, num_users):
+        first_item = dict(list(data_dict.items())[:1])
+        key_subject = list(first_item.keys())[0]
+        print('userID: ', key_subject)
+        ### Target set: key_subject data
+        output_dict = features_fun(first_item, tf, tp, bin_size, freq)
+        train_dict_, test_dict = split_fun(output_dict, train_ratio=0.8)
+        train_dict, val_dict = split_fun(train_dict_, train_ratio=0.8)
+        batch_size = 16
+        dataloader = create_dataloader(dataloader_fun, train_dict, tp, tf, bin_size, batch_size, shuffle=True)
+        dataloader_val = create_dataloader(dataloader_fun, val_dict, tp, tf, bin_size, batch_size, shuffle=False)
+        dataloader_test = create_dataloader(dataloader_fun, test_dict, tp, tf, bin_size, batch_size, shuffle=False)
+        dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, tf, bin_size, batch_size, shuffle=True)
+        if invalid_data_PDM(dataloader) or invalid_data_PDM(dataloader_test) or invalid_data_PDM(dataloader_val) or invalid_data_PDM(dataloader_final):
+            invalid_users.append(key_subject)
+        else:
+            try:
+                # source_set = coger todos los datos de los usuarios menos los suyos de pretrain_data_dict
+                source_data_dict = {k: v for k, v in pretrain_data_dict.items() if k != key_subject}
+                source_data_dict_ids = [k for k, v in pretrain_data_dict.items() if k != key_subject] # test
+                print('source_data_dict subjects: ', source_data_dict_ids)
+                # entrenar modelo con source
+                path_pretrained_model = pretrain_model_for_HM(tp, tf, freq, source_data_dict, path_results, path_models,
+                                                              model_code, feats_code, split_code,
+                                                              b_size, cw_type, seed=1)
+                # load pretrained model (de path_pretrained_model), importante no en eval()
+                num_sequences = tp // bin_size  # tp//bin_size en EEGNetLSTMwinLabelsSeqs_binS
+                eegnet_params = {
+                    'num_electrodes': EEG_channels,  # (EDA, ACC_X, ACC_Y, ACC_Z, BVP) | (EDA, ACC_Norm, BVP) | ....
+                    'chunk_size': tp * freq // num_sequences  # muestras en cada ventana
+                }
+                lstm_hidden_dim = 64
+                num_classes = 1
+                model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
+                model.load_state_dict(torch.load(path_pretrained_model, map_location=device, weights_only=True))
+                num_epochs = 100
+                best_num_epochs = train_fun(model, dataloader, dataloader_val, num_epochs, cw_type, device)
+                final_model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
+                final_model.load_state_dict(torch.load(path_pretrained_model, map_location=device, weights_only=True))
+                path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_subj{key_subject}_cw{cw_type}_hybrid_model.pth"
+                results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs, cw_type,
+                                      device, key_subject, path_model)
+                final_results.append(results)
+                results_df_temp = pd.DataFrame(final_results)
+                path_to_save_results_temp = f'{path_results}HM_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_cw{cw_type}_all_experiments_results_temp.csv'
+                results_df_temp.to_csv(path_to_save_results_temp, index=False)
+            except Exception as e:
+                print(f"❌ Error con usuario {key_subject}: {e}")
+        data_dict.pop(next(iter(first_item)))
+
+    results_df = pd.DataFrame(final_results)
+    avg_metrics = results_df[['F1-Score', 'Best_F1-score', 'Best_th', 'AUC-ROC', 'Num_epochs']].mean()
+    std_metrics = results_df[['F1-Score', 'Best_F1-score', 'Best_th', 'AUC-ROC', 'Num_epochs']].std()
+    summary_df = pd.DataFrame({
+        "Experiment": ["Avg.", "Std."],
+        'F1-Score': [avg_metrics['F1-Score'], std_metrics['F1-Score']],
+        'Best_F1-score': [avg_metrics['Best_F1-score'], std_metrics['Best_F1-score']],
+        'Best_th': [avg_metrics['Best_th'], std_metrics['Best_th']],
+        'AUC-ROC': [avg_metrics['AUC-ROC'], std_metrics['AUC-ROC']],
+        'Num_epochs': [avg_metrics['Num_epochs'], std_metrics['Num_epochs']]
+    })
+    final_results_df = pd.concat([results_df, summary_df], ignore_index=True)
+    path_to_save_results = f'{path_results}HM_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_cw{cw_type}_all_experiments_results.csv'
+    final_results_df.to_csv(path_to_save_results, index=False)
+    print("Results saved successfully.")
+
+
+def start_exps_PM_v2(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, cw_type, seed=1):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_fun, features_fun, dataloader_fun, train_fun, retrain_fun = set_model(model_code)
+    load_data_fun, model_fun, EEG_channels = set_features(feats_code, model_fun)
+    split_fun = get_split_fun(split_code, True)
+    ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
+    data_dict = load_data_fun(ds_path)
+    pretrain_data_dict = load_data_fun(ds_path)
+    tp, tf, stride, bin_size = tp, tf, b_size, b_size
+    print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}.')
+    final_results = []
+    num_users = len(list(data_dict.items()))
+    invalid_users = []
+    for u in range(0, num_users):
+        first_item = dict(list(data_dict.items())[:1])
+        key_subject = list(first_item.keys())[0]
+        print('userID: ', key_subject)
+        ### Target set: key_subject data
+        output_dict = features_fun(first_item, tf, tp, bin_size, freq)
+        train_dict_, test_dict = split_fun(output_dict, train_ratio=0.8)
+        train_dict, val_dict = split_fun(train_dict_, train_ratio=0.8)
+        batch_size = 16
+        dataloader = create_dataloader(dataloader_fun, train_dict, tp, tf, bin_size, batch_size, shuffle=True)
+        dataloader_val = create_dataloader(dataloader_fun, val_dict, tp, tf, bin_size, batch_size, shuffle=False)
+        dataloader_test = create_dataloader(dataloader_fun, test_dict, tp, tf, bin_size, batch_size, shuffle=False)
+        dataloader_final = create_dataloader(dataloader_fun, train_dict_, tp, tf, bin_size, batch_size, shuffle=True)
+        if invalid_data_PDM(dataloader) or invalid_data_PDM(dataloader_test) or invalid_data_PDM(dataloader_val) or invalid_data_PDM(dataloader_final):
+            invalid_users.append(key_subject)
+        else:
+            try:
+                # source_set = coger todos los datos de los usuarios menos los suyos de pretrain_data_dict
+                source_data_dict = {k: v for k, v in pretrain_data_dict.items() if k != key_subject}
+                source_data_dict_ids = [k for k, v in pretrain_data_dict.items() if k != key_subject] # test
+                print('source_data_dict subjects: ', source_data_dict_ids)
+                # entrenar modelo con source
+                path_pretrained_model = pretrain_model_for_HM(tp, tf, freq, source_data_dict, path_results, path_models,
+                                                              model_code, feats_code, split_code,
+                                                              b_size, cw_type, seed=1)
+                # load pretrained model (de path_pretrained_model), importante no en eval()
+                num_sequences = tp // bin_size  # tp//bin_size en EEGNetLSTMwinLabelsSeqs_binS
+                eegnet_params = {
+                    'num_electrodes': EEG_channels,  # (EDA, ACC_X, ACC_Y, ACC_Z, BVP) | (EDA, ACC_Norm, BVP) | ....
+                    'chunk_size': tp * freq // num_sequences  # muestras en cada ventana
+                }
+                lstm_hidden_dim = 64
+                num_classes = 1
+                model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
+                model.load_state_dict(torch.load(path_pretrained_model, map_location=device, weights_only=True))
+
+                path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_subj{key_subject}_cw{cw_type}_pretrained_model.pth"
+                torch.save(model.state_dict(), path_model)
+                results = test_trained_model_aGGObs(model, dataloader_test, 0, device, key_subject)
+                final_results.append(results)
+                results_df_temp = pd.DataFrame(final_results)
+                path_to_save_results_temp = f'{path_results}PM_v2_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_cw{cw_type}_all_experiments_results_temp.csv'
+                results_df_temp.to_csv(path_to_save_results_temp, index=False)
+            except Exception as e:
+                print(f"❌ Error con usuario {key_subject}: {e}")
+        data_dict.pop(next(iter(first_item)))
+
+    results_df = pd.DataFrame(final_results)
+    avg_metrics = results_df[['F1-Score', 'Best_F1-score', 'Best_th', 'AUC-ROC', 'Num_epochs']].mean()
+    std_metrics = results_df[['F1-Score', 'Best_F1-score', 'Best_th', 'AUC-ROC', 'Num_epochs']].std()
+    summary_df = pd.DataFrame({
+        "Experiment": ["Avg.", "Std."],
+        'F1-Score': [avg_metrics['F1-Score'], std_metrics['F1-Score']],
+        'Best_F1-score': [avg_metrics['Best_F1-score'], std_metrics['Best_F1-score']],
+        'Best_th': [avg_metrics['Best_th'], std_metrics['Best_th']],
+        'AUC-ROC': [avg_metrics['AUC-ROC'], std_metrics['AUC-ROC']],
+        'Num_epochs': [avg_metrics['Num_epochs'], std_metrics['Num_epochs']]
+    })
+    final_results_df = pd.concat([results_df, summary_df], ignore_index=True)
+    path_to_save_results = f'{path_results}PM_v2_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_cw{cw_type}_all_experiments_results.csv'
     final_results_df.to_csv(path_to_save_results, index=False)
     print("Results saved successfully.")
 
@@ -712,6 +1130,7 @@ def create_dataloader_multi(dataloader_fun, output_dict, label_key, tp, tf, bin_
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=False)
     return dataloader
 
+
 def evaluate_ensemble_results_multi(all_labels, probs_sib, probs_agg, probs_ed):
     # max. de probabilidades (soft voting)
     final_probs = np.maximum.reduce([probs_sib, probs_agg, probs_ed])
@@ -737,7 +1156,7 @@ def evaluate_ensemble_results_multi(all_labels, probs_sib, probs_agg, probs_ed):
     }
 
 
-def start_exps_PM_multi(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, seed=1):
+def start_exps_PM_multi(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, cw_type, seed=1):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -762,9 +1181,11 @@ def start_exps_PM_multi(tp, tf, freq, data_path_resampled, path_results, path_mo
         print(f"Fold {fold_idx + 1}:")
         print(f"  Train UIDs: {train_uids}")
         print(f"  Test UIDs: {test_uids}")
+
         # Obtener particiones de train, val y test en funcion de los ids del fold
         train_dict, val_dict, test_dict, all_train_dict = get_partitions_from_fold(data_dict, train_uids, test_uids, split_code, PDM, seed)
-        # Dividir las sesiones de cada usuario en bins y almacenar raw signals y etiquetas
+        # Dividir las sesiones de cada usuario en bins de 15 segundos y almacenar raw signals y etiquetas
+        # (variable binaria que indica la ocurrencia de un episodio agresivo en el bin)
         train_data = features_fun(train_dict, bin_size, freq)
         val_data = features_fun(val_dict, bin_size, freq)
         test_data = features_fun(test_dict, bin_size, freq)
@@ -772,9 +1193,11 @@ def start_exps_PM_multi(tp, tf, freq, data_path_resampled, path_results, path_mo
 
         for label_type in labels_list:
             print(f"Training model for {label_type}")
+
             dataloader = create_dataloader_multi(dataloader_fun, train_data, label_type, tp, tf, bin_size, batch_size, shuffle=True)
             dataloader_val = create_dataloader_multi(dataloader_fun, val_data, label_type, tp, tf, bin_size, batch_size, shuffle=False)
             dataloader_test = create_dataloader_multi(dataloader_fun, test_data, label_type, tp, tf, bin_size, batch_size, shuffle=False)
+
             # create model
             num_sequences = tp // bin_size
             bin_size = 15
@@ -786,13 +1209,16 @@ def start_exps_PM_multi(tp, tf, freq, data_path_resampled, path_results, path_mo
             num_classes = 1
             model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
             num_epochs = 100
-            best_num_epochs = train_fun(model, dataloader, dataloader_val, num_epochs, device)
+
+            best_num_epochs = train_fun(model, dataloader, dataloader_val, num_epochs, cw_type, device)
+
             final_model = model_fun(eegnet_params, lstm_hidden_dim, num_classes).to(device)
             all_train_data = features_fun(all_train_dict, bin_size, freq)
             dataloader_final = create_dataloader_multi(dataloader_fun, all_train_data, label_type, tp, tf, bin_size, batch_size, shuffle=True)
-            path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_fold{fold_idx}_label{label_type}_model.pth"
+
+            path_model = f"{path_models}mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_fold{fold_idx}_label{label_type}__cw{cw_type}_model.pth"
             print('eegnet params: ', eegnet_params)
-            results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs, device, fold_idx,
+            results = retrain_fun(final_model, dataloader_final, dataloader_test, best_num_epochs, cw_type, device, fold_idx,
                                   path_model)
             final_results[label_type].append(results)
 
@@ -809,7 +1235,7 @@ def start_exps_PM_multi(tp, tf, freq, data_path_resampled, path_results, path_mo
             'Num_epochs': [avg_metrics['Num_epochs'], std_metrics['Num_epochs']]
         })
         final_results_df = pd.concat([results_df, summary_df], ignore_index=True)
-        path_to_save_results = f'{path_results}PM_multi_{label_type}_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_all_experiments_results_5cv.csv'
+        path_to_save_results = f'{path_results}PM_multi_{label_type}_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_sc{split_code}_cw{cw_type}_all_experiments_results_5cv.csv'
         final_results_df.to_csv(path_to_save_results, index=False)
         print(f"Results for {label_type} saved successfully.")
     print("Results saved successfully.")

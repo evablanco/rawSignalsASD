@@ -191,12 +191,64 @@ class New_EEGNetLSTM_AGGObsr(nn.Module):
         final_output = lstm_output[:, -1, :]
         return self.fc(final_output).view(-1)
 
+class New_EEGNetLSTM_AGGObsr_Simple_1(nn.Module):
+    def __init__(self, eegnet_params, lstm_hidden_dim, num_classes=1):
+        super(New_EEGNetLSTM_AGGObsr_Simple_1, self).__init__()
+        self.eegnet = EEGNet(**eegnet_params)
+        self.eeg_feature_dim = self.eegnet.feature_dim()
+        self.lstm = nn.LSTM(input_size=self.eeg_feature_dim+1, hidden_size=lstm_hidden_dim, num_layers=1, batch_first=True)
+        self.fc = nn.Linear(lstm_hidden_dim, num_classes)
+
+    def forward(self, x, aggObs):
+        batch_size, num_seqs, channels, time_steps = x.shape
+        # Redimensionar x para dividirlo en num_sequences
+        x = x.view(batch_size * num_seqs, channels, time_steps)
+        # (batch_size * num_sequences, 1, channels, sequence_length)
+        x = x.unsqueeze(1)
+        # (batch_size * num_sequences, eegnet_output_dim)
+        eegnet_features = self.eegnet(x)  # (batch_size * sequence_size, eegnet_output_dim)
+        # (batch_size, num_sequences, eegnet_output_dim)
+        eegnet_features = eegnet_features.view(batch_size, num_seqs, -1)
+        # concatenate with aGGObs: resize from (batch_size, num_seqs) to (batch_size, num_seqs, 1)
+        aGGObserved = aggObs.unsqueeze(2)
+        concatenated = torch.cat((eegnet_features, aGGObserved), dim=2)
+        lstm_output, _ = self.lstm(concatenated)
+        final_output = lstm_output[:, -1, :]
+        return self.fc(final_output).view(-1)
+
+
+class New_EEGNetLSTM_AGGObsr_Simple_2(nn.Module):
+    def __init__(self, eegnet_params, lstm_hidden_dim, num_classes=1):
+        super(New_EEGNetLSTM_AGGObsr_Simple_2, self).__init__()
+        self.eegnet = EEGNet(**eegnet_params)
+        self.eeg_feature_dim = self.eegnet.feature_dim()
+        self.lstm = nn.LSTM(input_size=self.eeg_feature_dim+1, hidden_size=lstm_hidden_dim, num_layers=2, batch_first=True)
+        self.fc = nn.Linear(lstm_hidden_dim, num_classes)
+
+    def forward(self, x, aggObs):
+        batch_size, num_seqs, channels, time_steps = x.shape
+        # Redimensionar x para dividirlo en num_sequences
+        x = x.view(batch_size * num_seqs, channels, time_steps)
+        # (batch_size * num_sequences, 1, channels, sequence_length)
+        x = x.unsqueeze(1)
+        # (batch_size * num_sequences, eegnet_output_dim)
+        eegnet_features = self.eegnet(x)  # (batch_size * sequence_size, eegnet_output_dim)
+        # (batch_size, num_sequences, eegnet_output_dim)
+        eegnet_features = eegnet_features.view(batch_size, num_seqs, -1)
+        # concatenate with aGGObs: resize from (batch_size, num_seqs) to (batch_size, num_seqs, 1)
+        aGGObserved = aggObs.unsqueeze(2)
+        concatenated = torch.cat((eegnet_features, aGGObserved), dim=2)
+        lstm_output, _ = self.lstm(concatenated)
+        final_output = lstm_output[:, -1, :]
+        return self.fc(final_output).view(-1)
+
 
 class New_LSTM_AGGObsr(nn.Module):
     def __init__(self, eegnet_params, lstm_hidden_dim, num_classes=1):
         super(New_LSTM_AGGObsr, self).__init__()
         self.lstm = nn.LSTM(input_size=1, hidden_size=lstm_hidden_dim, num_layers=3, batch_first=True)
         self.fc = nn.Linear(lstm_hidden_dim, num_classes)
+        self.eeg_feature_dim = None
 
     def forward(self, _, aggObs):
         aggObs = aggObs.unsqueeze(-1)

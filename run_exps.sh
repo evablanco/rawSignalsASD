@@ -1,16 +1,15 @@
 #!/bin/bash
 
-SCRIPT="main.py"
 
+SCRIPT="main.py"
 LOG_DIR="logs"
 mkdir -p $LOG_DIR
-
 
 TP_VALUES=(180)
 TF_VALUES=(180)
 MODEL_VERSIONS=(1 2) # (1 2)
 F_VALUES=(0) # (0 1 2 3 4 5 6 7 8)
-M_VALUES=(0 1) # (0 PM 1 PDM)
+M_VALUES=(1) # (0 PM 1 PDM)
 BIN_SIZES=(15)
 SPLIT_CODES=(0 1)
 

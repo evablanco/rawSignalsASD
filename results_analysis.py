@@ -69,7 +69,7 @@ def analyse_PDM_results_v4(path_results, model_code, feats_code, tf, tp, bin_siz
         total_episodes.append(num_episodes)
         total_sessions.append(num_sessions)
         mean_episodes_per_session.append(num_episodes / num_sessions if num_sessions > 0 else 0)
-        mean_episode_duration.append(np.mean(all_durations) / 60 if all_durations else 0)
+        mean_episode_duration.append(np.mean(all_durations))
         total_duration_episodes.append(total_duration / 60)
         total_duration_sessions.append(np.sum(session_durations) if session_durations else 0)
 
@@ -79,7 +79,7 @@ def analyse_PDM_results_v4(path_results, model_code, feats_code, tf, tp, bin_siz
         'Total Episodes': total_episodes,
         'Total Sessions': total_sessions,
         'Mean Episodes per Session': np.round(mean_episodes_per_session, 2),
-        'Mean Episode Duration (min.)': np.round(mean_episode_duration, 2),
+        'Mean Episode Duration (s.)': np.round(mean_episode_duration, 2),
         'Total Duration Episodes (min.)': np.round(total_duration_episodes, 2),
         'Total Duration Sessions (min.)': np.round(total_duration_sessions, 2)
     })
@@ -102,7 +102,7 @@ def analyse_PDM_results_v4(path_results, model_code, feats_code, tf, tp, bin_siz
         ("AUC vs Total Episodes", 'Total Episodes', axs[1, 0]),
         ("AUC vs Total Duration Episodes", 'Total Duration Episodes (min.)', axs[1, 1]),
         ("AUC vs Mean Episodes per Session", 'Mean Episodes per Session', axs[2, 0]),
-        ("AUC vs Mean Episode Duration", 'Mean Episode Duration (min.)', axs[2, 1])
+        ("AUC vs Mean Episode Duration", 'Mean Episode Duration (s.)', axs[2, 1])
     ]
 
     for i, (title, column, ax) in enumerate(plot_data):
@@ -128,7 +128,7 @@ def analyse_PDM_results_v4(path_results, model_code, feats_code, tf, tp, bin_siz
     plt.savefig(path_to_save_results)
     plt.show()
 
-
+'''
 # Usage example
 path_results = './results/'
 model_code = 2
@@ -137,4 +137,5 @@ tf, tp = 180, 180
 bin_size = 15
 split_code = 0
 analyse_PDM_results_v4(path_results, model_code, feats_code, tf, tp, bin_size, split_code)
+'''
 

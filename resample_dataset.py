@@ -455,6 +455,7 @@ def analyse_subjects_data():
     mean_episodes_per_session = []
     mean_episode_duration = []
     total_duration_episodes = []
+    total_duration_sessions = []
 
     def compute_episode_count_and_duration(condition_series, time_series):
         condition_series = condition_series.reset_index(drop=True)
@@ -480,7 +481,7 @@ def analyse_subjects_data():
         num_sessions = len(subject_data)
         episodes_per_session = []
         total_duration = 0
-
+        session_durations = []
         for session_id, session_data in subject_data.items():
             session_data = session_data.sort_index()
             num_episodes_in_session, total_duration_in_session = compute_episode_count_and_duration(
@@ -489,21 +490,38 @@ def analyse_subjects_data():
             num_episodes += num_episodes_in_session
             episodes_per_session.append(num_episodes_in_session)
             total_duration += total_duration_in_session
+            if not session_data.empty:
+                session_duration = (session_data.index[-1] - session_data.index[0]).total_seconds()
+                session_durations.append(session_duration / 60 /60)
 
         total_episodes.append(num_episodes)
         total_sessions.append(num_sessions)
         mean_episodes_per_session.append(num_episodes / num_sessions if num_sessions > 0 else 0)
-        mean_episode_duration.append((total_duration / num_episodes) / 60 if num_episodes > 0 else 0)
+        mean_episode_duration.append((total_duration / num_episodes) if num_episodes > 0 else 0)
         total_duration_episodes.append(total_duration / 60)
+        total_duration_sessions.append(np.sum(session_durations) if session_durations else 0)
 
     analysis_df = pd.DataFrame({
         'Subject': subject_ids,
         'Total Episodes': total_episodes,
         'Total Sessions': total_sessions,
         'Mean Episodes per Session': np.round(mean_episodes_per_session, 2),
-        'Mean Episode Duration (min.)': np.round(mean_episode_duration, 2),
-        'Total Duration Episodes (min.)': np.round(total_duration_episodes, 2)
+        'Mean Episode Duration (s.)': np.round(mean_episode_duration, 2),
+        'Total Duration Episodes (min.)': np.round(total_duration_episodes, 2),
+        'Total Duration Sessions (h.)': np.round(total_duration_sessions, 2)
     })
+
+    # Compute IQRs properly (25th and 75th percentiles)
+    iqr_sessions = analysis_df["Total Sessions"].quantile([0.25, 0.75]).tolist()
+    iqr_episodes = analysis_df["Total Episodes"].quantile([0.25, 0.75]).tolist()
+    iqr_ep_duration = analysis_df["Mean Episode Duration (s.)"].quantile([0.25, 0.75]).tolist()
+    iqr_total_duration = analysis_df["Total Duration Sessions (h.)"].quantile([0.25, 0.75]).tolist()
+
+    print('Median total sessions: ', analysis_df["Total Sessions"].median(), ', median total episodes: ', analysis_df["Total Episodes"].median())
+    print('Median Mean Episode Duration (s.): ', analysis_df["Mean Episode Duration (s.)"].median(), ', median Total Duration Sessions (h.): ',
+          analysis_df["Total Duration Sessions (h.)"].median())
+    print("sessions_IQR: ", iqr_sessions, ", episodes_IQR: ", iqr_episodes, ", ep_duration_IQR: ", iqr_ep_duration,
+          ", total_session_duration_IQR: ", iqr_total_duration)
 
     mean_values = analysis_df.iloc[:, 1:].mean().round(2)
     std_values = analysis_df.iloc[:, 1:].std().round(2)
@@ -515,6 +533,8 @@ def analyse_subjects_data():
     os.makedirs(output_dir, exist_ok=True)
     output_path_csv = os.path.join(output_dir, "all_subjects_data_analysis.csv")
     analysis_df.to_csv(output_path_csv, index=False)
+
+
 
     print(f"DataFrame saved at: {output_path_csv}")
 
@@ -561,7 +581,7 @@ save_subject_session_data_from_dict(orig_data, "4107.01", "05", save_path)
 '''
 # Usage examples for paper
 resampled_data = pd.read_csv('./dataset_resampled/dataset_32Hz.csv', dtype={'SubjectID': str, 'SessionID': str})
-plot_subject_data(resampled_data, "4356.01", "01", start_seconds=0, interval_seconds=900)
+#plot_subject_data(resampled_data, "4356.01", "01", start_seconds=0, interval_seconds=900)
 analyse_subjects_data()
 '''
 

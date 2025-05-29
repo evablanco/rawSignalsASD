@@ -7,8 +7,10 @@ import train
 
 
 def prepare_data_from_dataloader(dataloader):
+    """ Extrae las características (X) y etiquetas (y) desde un DataLoader. """
     X = []
     y = []
+    # batch_features, batch_aGGObs, batch_labels
     for _, (batch_features, batch_labels) in enumerate(dataloader):
         for batch_idx in range(batch_features.shape[0]):
             X.append(batch_features[batch_idx].numpy().flatten())
@@ -16,8 +18,10 @@ def prepare_data_from_dataloader(dataloader):
     return np.array(X), np.array(y)
 
 def prepare_data_from_dataloader_AGGOBs(dataloader):
+    """ Extrae las características (X) y etiquetas (y) desde un DataLoader. """
     X = []
     y = []
+    # batch_features, batch_aGGObs, batch_labels
     for _, (batch_features, batch_aGGObs, batch_labels) in enumerate(dataloader):
         for batch_idx in range(batch_aGGObs.shape[0]):
             X.append(batch_aGGObs[batch_idx].numpy().flatten())
@@ -26,6 +30,10 @@ def prepare_data_from_dataloader_AGGOBs(dataloader):
 
 
 def train_evaluate_dummy(dataloader_train, dataloader_test, model_code, strategy):
+    """
+    Entrena y evalúa un DummyClassifier con la estrategia especificada.
+    Devuelve un diccionario con las métricas obtenidas.
+    """
     if model_code == 1:
         X_train, y_train = prepare_data_from_dataloader(dataloader_train)
         X_test, y_test = prepare_data_from_dataloader(dataloader_test)
@@ -57,14 +65,21 @@ def train_evaluate_dummy(dataloader_train, dataloader_test, model_code, strategy
 
 
 def start_exps_PM_dummy(tp, tf, freq, data_path_resampled, path_results, model_code, feats_code, split_code, b_size, seed=1):
+    """
+    Entrena y evalúa Dummy Classifiers (most_frequent y stratified) en cada fold, generando estadísticas
+    en archivos CSV para cada estrategia.
+    """
     np.random.seed(seed)
     torch.manual_seed(seed)
 
     _, features_fun, dataloader_fun, _, _ = train.set_model(model_code)
+
+    # Cargar datos
     ds_path = f"{data_path_resampled}dataset_{freq}Hz.csv"
     load_data_fun, _, _ = train.set_features(feats_code, None)
     data_dict = load_data_fun(ds_path)
 
+    # Generar folds
     num_folds = 5
     folds = train.generate_user_kfolds(data_dict, k=num_folds)
     print(f"tp: {tp}, tf: {tf}, bin_size: {b_size}.")
@@ -77,14 +92,19 @@ def start_exps_PM_dummy(tp, tf, freq, data_path_resampled, path_results, model_c
         print(f"  Train UIDs: {train_uids}")
         print(f"  Test UIDs: {test_uids}")
 
+        # Obtener particiones de train, val y test en función de los ids del fold
         _, _, test_dict, train_dict = train.get_partitions_from_fold(data_dict, train_uids, test_uids, split_code, False, seed)
+
+        # Extraer características y etiquetas de los datos
         train_data = features_fun(train_dict, tp, tf, b_size, freq)
         test_data = features_fun(test_dict, tp, tf, b_size, freq)
 
+        # Crear DataLoaders
         batch_size = 128
         dataloader_train = train.create_dataloader(dataloader_fun, train_data, tp, tf, b_size, batch_size, shuffle=True)
         dataloader_test = train.create_dataloader(dataloader_fun, test_data, tp, tf, b_size, batch_size, shuffle=False)
 
+        # Entrenar y evaluar Dummy Classifiers
         results_strat = train_evaluate_dummy(dataloader_train, dataloader_test, model_code, strategy="stratified")
         results_strat["Fold"] = fold_idx
         final_results_stratified.append(results_strat)
@@ -93,13 +113,18 @@ def start_exps_PM_dummy(tp, tf, freq, data_path_resampled, path_results, model_c
         results_mostfreq["Fold"] = fold_idx
         final_results_mostfreq.append(results_mostfreq)
 
+    # Convertir resultados en DataFrame
     results_df_strat = pd.DataFrame(final_results_stratified)
     results_df_mostfreq = pd.DataFrame(final_results_mostfreq)
+
+    # Calcular métricas de promedio y desviación estándar
     avg_metrics_strat = results_df_strat.mean()
     std_metrics_strat = results_df_strat.std()
+
     avg_metrics_mostfreq = results_df_mostfreq.mean()
     std_metrics_mostfreq = results_df_mostfreq.std()
 
+    # Crear DataFrame resumen
     summary_df_strat = pd.DataFrame({
         "Fold": ["Avg.", "Std."],
         'F1-Score': [avg_metrics_strat['F1-Score'], std_metrics_strat['F1-Score']],
@@ -118,6 +143,7 @@ def start_exps_PM_dummy(tp, tf, freq, data_path_resampled, path_results, model_c
         'Accuracy': [avg_metrics_mostfreq['Accuracy'], std_metrics_mostfreq['Accuracy']]
     })
 
+    # Guardar CSVs con los resultados
     final_results_df_stratified = pd.concat([results_df_strat, summary_df_strat], ignore_index=True)
     path_to_save_results = f'{path_results}dummy_stratified_PM_SS_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{b_size}_sc{split_code}_all_experiments_results_5cv.csv'
     final_results_df_stratified.to_csv(path_to_save_results, index=False)
@@ -130,22 +156,32 @@ def start_exps_PM_dummy(tp, tf, freq, data_path_resampled, path_results, model_c
 
 
 def start_exps_PDM_dummy(tp, tf, freq, data_path_resampled, path_results, model_code, feats_code, split_code, b_size, seed=1):
+    """
+    Entrena y evalúa Dummy Classifiers (most_frequent y stratified) en cada fold, generando estadísticas
+    en archivos CSV para cada estrategia.
+    """
     np.random.seed(seed)
     torch.manual_seed(seed)
 
     _, features_fun, dataloader_fun, _, _ = train.set_model(model_code)
+
+    # Cargar datos
     ds_path = f"{data_path_resampled}dataset_{freq}Hz.csv"
     load_data_fun, _, _ = train.set_features(feats_code, None)
     data_dict = load_data_fun(ds_path)
 
+    # Generar folds
     num_folds = 5
     folds = train.generate_user_kfolds(data_dict, k=num_folds)
     print(f"tp: {tp}, tf: {tf}, bin_size: {b_size}.")
+
     final_results_stratified = []
     final_results_mostfreq = []
+
     split_fun = train.get_split_fun(split_code, True)
     tp, tf, stride, bin_size = tp, tf, 15, 15
     print(f'tp: {tp}, tf: {tf}, stride: {stride}, bin_size: {bin_size}, sc:{split_code}.')
+
     final_results = []
     num_users = len(list(data_dict.items()))
     invalid_users = []
@@ -165,6 +201,7 @@ def start_exps_PDM_dummy(tp, tf, freq, data_path_resampled, path_results, model_
         if train.invalid_data_PDM(dataloader) or train.invalid_data_PDM(dataloader_test) or train.invalid_data_PDM(dataloader_val) or train.invalid_data_PDM(dataloader_train):
             invalid_users.append(key_subject)
         else:
+            # Entrenar y evaluar Dummy Classifiers
             results_strat = train_evaluate_dummy(dataloader_train, dataloader_test, model_code, strategy="stratified")
             results_strat["SubjectID"] = key_subject
             final_results_stratified.append(results_strat)
@@ -175,13 +212,19 @@ def start_exps_PDM_dummy(tp, tf, freq, data_path_resampled, path_results, model_
             final_results_mostfreq.append(results_mostfreq)
         data_dict.pop(next(iter(first_item)))
 
+
+    # Convertir resultados en DataFrame
     results_df_strat = pd.DataFrame(final_results_stratified)
     results_df_mostfreq = pd.DataFrame(final_results_mostfreq)
+
+    # Calcular métricas de promedio y desviación estándar
     avg_metrics_strat = results_df_strat.mean(numeric_only=True)
     std_metrics_strat = results_df_strat.std(numeric_only=True)
+
     avg_metrics_mostfreq = results_df_mostfreq.mean(numeric_only=True)
     std_metrics_mostfreq = results_df_mostfreq.std(numeric_only=True)
 
+    # Crear DataFrame resumen
     summary_df_strat = pd.DataFrame({
         "Fold": ["Avg.", "Std."],
         'F1-Score': [avg_metrics_strat['F1-Score'], std_metrics_strat['F1-Score']],
@@ -200,6 +243,7 @@ def start_exps_PDM_dummy(tp, tf, freq, data_path_resampled, path_results, model_
         'Accuracy': [avg_metrics_mostfreq['Accuracy'], std_metrics_mostfreq['Accuracy']]
     })
 
+    # Guardar CSVs con los resultados
     final_results_df_stratified = pd.concat([results_df_strat, summary_df_strat], ignore_index=True)
     path_to_save_results = f'{path_results}dummy_stratified_PDM_SS_mv{model_code}_f{feats_code}_tf{tf}_tp{tp}_bs{b_size}_sc{split_code}_all_experiments_results_5cv.csv'
     final_results_df_stratified.to_csv(path_to_save_results, index=False)
