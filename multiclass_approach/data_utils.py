@@ -228,6 +228,115 @@ class AggressiveBehaviorDataset(Dataset):
 
 
 
+def undersample_binary_classes(data_list, label_list, seed=42):
+    data_array = np.array(data_list)
+    label_array = np.array(label_list)
+
+    idx_pos = np.where(label_array == 1)[0]
+    idx_neg = np.where(label_array == 0)[0]
+
+    np.random.seed(seed)
+    sampled_neg = np.random.choice(idx_neg, size=len(idx_pos), replace=False)
+
+    balanced_idx = np.concatenate([idx_pos, sampled_neg])
+    np.random.shuffle(balanced_idx)
+
+    balanced_data = [data_array[i] for i in balanced_idx]
+    balanced_labels = [torch.tensor(label_array[i], dtype=torch.long) for i in balanced_idx]
+
+    print(f"Undersampling applied: {len(idx_pos)} pos / {len(sampled_neg)} neg samples")
+    return balanced_data, balanced_labels
+
+
+
+### Only calm and attack samples for pretrain feature extractor
+class AggressiveBehaviorDatasetExtreme(Dataset):
+    def __init__(self, data_dict, tp=15, tf=15, bin_size=15, balanced=True):
+        # tp: Observation time (s.)
+        # tf: Prediction time (s.)
+        # bin_size: bin size (s.)
+        # self.data contains past windows (sequences of bins) with the signal data associated with each bin in the range (t-tp, t)
+        # self.labels contains the label obtained from the prediction window associated with each past window,
+        # indicating the occurrence of an aggressive episode in the range (t, t+tf).
+        # sliding windows of size bin_size are used
+        self.data = []
+        self.labels = []
+        # number of bins in the past window
+        self.sequence_size = (tp//bin_size)
+        # number of bins in the prediction window
+        self.prediction_sequence_size = (tf // bin_size)
+        raw_data = []
+        raw_labels = []
+        # For each user and session, group each sample of size bin_size into N sequences, where N = (tp / bin_size)
+        for user, sessions in data_dict.items():
+            for session, session_data in sessions.items():
+                features = session_data['features']
+                labels = session_data['labels']
+                for i in range(len(features) - self.sequence_size - self.prediction_sequence_size + 1):
+                    # Get the signal values for each bin within the observation window [t-tp, t)
+                    windows = features[i:i+self.sequence_size]
+                    # Labels from the past [t−tp, t): check if there was an aggresive eppisode within the bins (aggObs)
+                    win_labels = labels[i:i + self.sequence_size]
+                    ##### new version: multi-class classification:
+                    # - Attack: si hay ataque activo en t (last bin de aggObsr == 1)
+                    # - Pre-attack: si no hay ataque en t y hay uno en [t, t+tf] (last aggObsr == 0 y sum prediction_labels != 0)
+                    # - Post-attack: si no hay ataque en t ni futuro, pero uno terminó antes de t (last bin aggObsr == 0, sum prediction_labels != 0 y sum aggObrs != 0)
+                    # - Calm: si no hay ataque en [t−tp, t+tf] (cualquier otro caso, es decir, sum aggObsr == 0 y sum prediction_bins == 0
+                    # else... print wtf!
+                    prediction_labels = labels[i + self.sequence_size:i + self.sequence_size + self.prediction_sequence_size]
+                    aggObsr_tensor = torch.stack([torch.tensor(win_l, dtype=torch.float32) for win_l in win_labels])
+                    last_bin = aggObsr_tensor[-1]
+                    last_sum = last_bin.sum()
+                    future_sum = sum(torch.tensor(l, dtype=torch.float32).sum() for l in prediction_labels)
+                    '''
+                    # si 4 clases
+                    if last_sum > 0:
+                        label = 2  # ATAQUE
+                    elif future_sum > 0:
+                        label = 1  # PRE-ATAQUE
+                    elif past_sum > 0:
+                        label = 3  # POST-ATAQUE
+                    elif past_sum+future_sum == 0:
+                        label = 0  # NORMAL
+                    else:
+                        print("WTF condition — check")
+                        print(f"last_sum: {last_sum}, past_sum: {past_sum}, future_sum: {future_sum}")  
+                    '''
+                    # si 3 clases
+                    if last_sum > 0:
+                        label = ATTACK  # ATAQUE
+                    elif future_sum > 0:
+                        label = PRE_ATTACK  # PRE-ATAQUE
+                    else:
+                        label = CALM  # NORMAL
+
+                    if label == ATTACK or label == CALM:
+                        if label == ATTACK: label = 1 # binary, pos class
+                        label_tensor = torch.tensor(label, dtype=torch.long)
+                        #self.labels.append(label_tensor)
+                        raw_labels.append(label)
+                        data_tensor = torch.stack([torch.tensor(window.values.T, dtype=torch.float32) for window in windows])
+                        #self.data.append(data_tensor)
+                        raw_data.append(data_tensor)
+
+        if balanced:
+            self.data, self.labels = undersample_binary_classes(raw_data, raw_labels)
+        else:
+            self.data = raw_data
+            self.labels = [torch.tensor(l, dtype=torch.long) for l in raw_labels]
+            print(f"No undersampling applied. Total samples: {len(self.labels)}")
+
+        print('done.')
+        print('done.')
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx], self.labels[idx]
+
+
+
 
 def plot_windows_from_dataset(dataset, class_names, save_path, n_samples_per_class=5, tp=300, channel_names=None,
                               highlight_secs=15):

@@ -11,12 +11,12 @@ if __name__ == '__main__':
     parser.add_argument("-d", "--datadir", type=str, default="dataset",
                         help="Data directory (default: ./dataset/)")
     parser.add_argument("-rs", type=bool, default=False, help="Resample signals.")
-    parser.add_argument("-test", type=bool, default=True, help="Analyse model results.")
+    parser.add_argument("-test", type=bool, default=False, help="Analyse model results.")
     parser.add_argument("-v", "--model_version", type=int, default=1, help="Model version: 1")
     parser.add_argument("-f", "--feats_code", type=int, default=0, help="Features used: 0 all, 1-3 leave one out, 4-6 only one source.")
     parser.add_argument("-tp", type=int, default=300, help="Number of seconds in the past (default is 60 = 1 min)")
     parser.add_argument("-tf", type=int, default=300, help="Number of seconds in the future (default is 180 = 3 min)")
-    parser.add_argument("-m", "--model", type=int, default=0,
+    parser.add_argument("-m", "--model", type=int, default=1,
                         help="model type (default is 0: PM. Use 1 for PDM, and 2 for HM. (ONLY implemented 0)")
     parser.add_argument("-sp", "--split_code", type=int, default=1,
                        help="Split type (default is 0: PM-Leave Subjects Out. Use 1 for PM-Session Splits 80/20)")
@@ -108,8 +108,8 @@ if __name__ == '__main__':
                 print('Exps PM:')
                 train.start_exps_PM(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type)
             if args.model == 1:
-                print('Exps PDM: #TO-DO!!! :)')
-                #train.start_exps_PDM(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type)
+                print('Exps PM intra_TL:)')
+                train.start_exps_PM_intraTL(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type)
             if args.model == 2:
                 print('Exps HM: #TO-DO!!! :)')
                 #train.start_exps_HM(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type)
