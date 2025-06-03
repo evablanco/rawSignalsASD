@@ -2,6 +2,7 @@ import argparse
 import resample_dataset
 import train
 import test
+import os
 
 
 if __name__ == '__main__':
@@ -16,10 +17,10 @@ if __name__ == '__main__':
     parser.add_argument("-f", "--feats_code", type=int, default=0, help="Features used: 0 all, 1-3 leave one out, 4-6 only one source.")
     parser.add_argument("-tp", type=int, default=300, help="Number of seconds in the past (default is 60 = 1 min)")
     parser.add_argument("-tf", type=int, default=300, help="Number of seconds in the future (default is 180 = 3 min)")
-    parser.add_argument("-m", "--model", type=int, default=1,
-                        help="model type (default is 0: PM. Use 1 for PDM, and 2 for HM. (ONLY implemented 0)")
+    parser.add_argument("-m", "--model", type=int, default=0,
+                        help="model type (default is 0: PM. Use 1 for intra TL in PM, and 3 for PDM.")
     parser.add_argument("-sp", "--split_code", type=int, default=1,
-                       help="Split type (default is 0: PM-Leave Subjects Out. Use 1 for PM-Session Splits 80/20)")
+                       help="Split type (default is 0: PM-Leave Subjects Out (PMs). Use 1 for PM-Session Splits 80/20) (default in PDMs)")
     parser.add_argument("-bs", "--bin_size", type=int, default='15', help="Bin duration in seconds (default=15)")
     parser.add_argument("-sb", "--specific_behavior", type=int, default='0', help="Predict aggresive episode combined (0) or different aggresive episodes (1) (default=0)")
     parser.add_argument("-cw", "--class_weights_type", type=int, default='1',
@@ -35,9 +36,12 @@ if __name__ == '__main__':
     #path_data = args.datadir
     data_path = './dataset/'
     data_path_resampled = './dataset_resampled/'
-    results_path = './results/'
-    models_path = './models/'
+    results_path = './normalized_sigs/results/'
+    results_analysis_path = './normalized_sigs/results_analysis/'
+    models_path = './normalized_sigs/models/'
     freq = 32
+
+    ###os.makedirs(results_path, exist_ok=True)
 
     #########
     class_type = args.specific_behavior
@@ -89,16 +93,22 @@ if __name__ == '__main__':
         if args.model == 0: ## PM-SS
             if class_type == 0: # Combined labels
                 test.run_full_evaluation_analysis(models_path, model_version, feats_code, tf, tp, bin_size, split_code, cw_type)
-                test.get_best_performing_models(results_folder="results", f1_threshold_csv="./results_analysis/f1_best_summary.csv",
-                    output_csv="summary_best_models.csv")
+                #test.get_best_performing_models(results_folder="results", f1_threshold_csv="./results_analysis/f1_best_summary.csv",
+                #    output_csv="summary_best_models.csv")
                 test.run_binary_calm_vs_aggressive_analysis(models_path, model_version, feats_code, tf, tp, bin_size, split_code, cw_type)
-
-            elif class_type == 1: # Independent models
-                pass #TO-DO!!!
-                #models_analysis.test_model_multi(models_path, model_version, feats_code, tf, tp, bin_size, split_code)
-        elif args.model == 1: ## PDM-SS
-            pass #TO-DO!!!
-            #models_analysis.analyse_PDM_results(results_path, model_version, feats_code, tf, tp, bin_size, split_code)
+            elif class_type == 1:  # Independent models
+                pass
+        elif args.model == 1: # Intra-domain TL
+            #test.run_full_evaluation_analysis(models_path, model_version, feats_code, tf, tp, bin_size, split_code,
+            #                                  cw_type)  ## TO-DO: Pasar model name (PM/PMTL)
+            #test.run_binary_calm_vs_aggressive_analysis(models_path, model_version, feats_code, tf, tp, bin_size,
+            #                                            split_code, cw_type)
+            test.run_full_evaluation_analysis(models_path, model_version, feats_code, tf, tp, bin_size, split_code,
+                                              cw_type)
+            test.evaluate_and_plot_confusion_matrices(
+                models_path, model_version, feats_code, tf, tp, bin_size,
+                split_code, cw_type, output_dir=results_analysis_path, threshold_active=0.5, seed=1
+            )
 
     else:
         if args.rs:
@@ -108,12 +118,12 @@ if __name__ == '__main__':
                 print('Exps PM:')
                 train.start_exps_PM(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type)
             if args.model == 1:
-                print('Exps PM intra_TL:)')
+                print('Exps intra_TL:')
                 train.start_exps_PM_intraTL(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type)
-            if args.model == 2:
-                print('Exps HM: #TO-DO!!! :)')
-                #train.start_exps_HM(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type)
             if args.model == 3:
+                print('Exps PDM:')
+                train.start_exps_PDM(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type)
+            if args.model == 4:
                 print('Exps PM-LOO: #TO-DO!!! :)')
                 #train.start_exps_PM_v2(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type)
         elif class_type == 1:

@@ -78,7 +78,22 @@ def get_distribution_labels(dataset):
     plt.show()
 
 
-def get_features_from_dict(data_dict, bin_size=15, freq=32):
+def compute_normalization_stats(train_dict, bin_size=15, freq=32):
+    all_data = []
+    win_size = bin_size * freq
+    for user_sessions in train_dict.values():
+        for df in user_sessions.values():
+            for i in range(0, len(df) - win_size, win_size):
+                window = df.iloc[i:i + win_size].drop(columns=["Condition"])
+                all_data.append(window.to_numpy())  # (win_size, num_features)
+    all_data = np.concatenate(all_data, axis=0)  # (total_samples, num_features)
+    mean = all_data.mean(axis=0)
+    std = all_data.std(axis=0) + 1e-8  # Para evitar 0 div
+    return mean, std
+
+
+
+def get_features_from_dict(data_dict, bin_size=15, freq=32, mean=None, std=None):
     # Calculate the size of one observation bin and the prediction window in terms of datapoints
     win_size = bin_size * freq  # Observation bin size in number of datapoints
     output_dict = {}
@@ -108,6 +123,8 @@ def get_features_from_dict(data_dict, bin_size=15, freq=32):
                 agg_observed = window_data.Condition.max()
                 agg_observed_list.append(agg_observed)
                 win_features = window_data.drop(columns=['Condition'])
+                if mean is not None and std is not None:
+                    win_features = (win_features - mean) / std
                 windows_list.append(win_features)
                 # Increment the bin counter and update the endpoint of the next window
                 counter += 1

@@ -1,4 +1,4 @@
-import train, data_utils
+import train, data_utils, models
 import os
 import torch
 import pandas as pd
@@ -9,13 +9,17 @@ from sklearn.metrics import precision_recall_fscore_support
 import re
 from sklearn.metrics import roc_curve, auc
 import seaborn as sns
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, f1_score
 from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score
 import glob
+from captum.attr import IntegratedGradients
 
+
+CALM, PRE_ATTACK, ATTACK = 0, 1, 2
+results_analysis_path = './normalized_sigs/results_analysis'
 
 def extract_hyperparams_from_filename(filename):
-    pattern = r"PM_mv(\d+)_f(\d+)_tf(\d+)_tp(\d+)_bs(\d+)_sc(\d+)_cw(\d+)"
+    pattern = r"PMTL_mv(\d+)_f(\d+)_tf(\d+)_tp(\d+)_bs(\d+)_sc(\d+)_cw(\d+)"
     match = re.search(pattern, filename)
     if match:
         mv, f, tf, tp, bs, sc, cw = match.groups()
@@ -41,7 +45,7 @@ def find_best_models_by_metric(results_dir):
     for filename in os.listdir(results_dir):
         if filename.endswith(".csv") and "all_experiments_results" in filename:
             file_path = os.path.join(results_dir, filename)
-            match = re.search(r"PM_mv(\d+)_f(\d+)_tf(\d+)_tp(\d+)_bs(\d+)_sc(\d+)_cw(\d+)", filename)
+            match = re.search(r"PMTL_mv(\d+)_f(\d+)_tf(\d+)_tp(\d+)_bs(\d+)_sc(\d+)_cw(\d+)", filename)
             if not match:
                 continue
             try:
@@ -134,7 +138,7 @@ def test_model(path_models, model_version, feats_code, tf, tp, bin_size, split_c
         eegnet_params = {'num_electrodes': EEG_channels, 'chunk_size': tp * freq // num_sequences}
         model = model_fun(eegnet_params, lstm_hidden_dim, lstm_num_layers, num_classes).to(device)
 
-        model_path = f"{path_models}PM_sc{split_code}_mv{model_version}_f{feats_code}_tf{tf}" + \
+        model_path = f"{path_models}PMTL_sc{split_code}_mv{model_version}_f{feats_code}_tf{tf}" + \
                      f"_tp{tp}_bs{bin_size}_cw{cw_type}_fold{fold_idx}_model.pth"
         if not os.path.exists(model_path):
             print(f"Warning!: falta modelo {model_path}. Se omite fold {fold_idx}.")
@@ -159,26 +163,249 @@ def test_model(path_models, model_version, feats_code, tf, tp, bin_size, split_c
         print(df.drop(columns=["Fold"]).mean().round(4))
         print("\nStd:")
         print(df.drop(columns=["Fold"]).std().round(4))
-        df.to_csv("evaluation_results_folds.csv", index=False)
+        df.to_csv(results_analysis_path + "evaluation_results_folds.csv", index=False)
         print("\nResultados guardados en 'evaluation_results_folds.csv'")
     else:
         print("No se ha evaluado ningún fold...")
 
 
+def eval_features_and_gradients(preloaded_data, feats_code, bin_size, tp, tf, split_code, cw_type, output_dir):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    selected_features = preloaded_data[0]['selected_features']
+    num_folds = len(preloaded_data)
+    time_bins = np.arange(-tp, 0, bin_size)
+
+    fig_grad, axs_grad = plt.subplots(1, num_folds + 1, figsize=(5 * (num_folds + 1), 4), sharey=True)
+    all_fold_attrs = []
+    for fold_data in preloaded_data:
+        fold_idx = fold_data['fold_idx']
+        model = fold_data['model']
+        test_loader = fold_data['test_loader']
+        ig = IntegratedGradients(model)
+        fold_attrs = []
+        for inputs, _ in test_loader:
+            inputs = inputs.to(device)
+            attrs = ig.attribute(inputs, target=1).cpu().detach().numpy()
+            fold_attrs.append(attrs)
+        fold_attrs = np.concatenate(fold_attrs, axis=0)
+        mean_attributions = fold_attrs.mean(axis=0)
+        all_fold_attrs.append(mean_attributions)
+        for i, channel in enumerate(selected_features):
+            channel_attr = mean_attributions[:, i, :].mean(axis=1)
+            axs_grad[fold_idx].plot(time_bins, channel_attr, label=channel)
+        axs_grad[fold_idx].set_title(f'Fold {fold_idx + 1}')
+        axs_grad[fold_idx].set_xlabel('Time (sec)')
+        axs_grad[fold_idx].grid(True)
+    mean_all_folds = np.mean(all_fold_attrs, axis=0)
+    for i, channel in enumerate(selected_features):
+        channel_attr = mean_all_folds[:, i, :].mean(axis=1)
+        axs_grad[-1].plot(time_bins, channel_attr, label=channel)
+    axs_grad[-1].set_title('Mean Across All Folds')
+    axs_grad[-1].set_xlabel('Time (sec)')
+    axs_grad[-1].legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    axs_grad[-1].grid(True)
+    plt.tight_layout()
+    grad_save_path = os.path.join(output_dir,
+                                  f'PMTL_sc{split_code}_mv1_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_cw{cw_type}_model_grads_avg.png')
+    plt.savefig(grad_save_path)
+    plt.close(fig_grad)
+
+    fig_imp, axs_imp = plt.subplots(1, 3, figsize=(18, 5))
+    for target_class in range(3):
+        class_attrs_all_folds = []
+        for fold_data in preloaded_data:
+            model = fold_data['model']
+            test_loader = fold_data['test_loader']
+            ig = IntegratedGradients(model)
+            fold_class_attrs = []
+            for inputs, _ in test_loader:
+                inputs = inputs.to(device)
+                attrs = ig.attribute(inputs, target=target_class).cpu().detach().numpy()
+                fold_class_attrs.append(attrs)
+            fold_class_attrs = np.concatenate(fold_class_attrs, axis=0)  # (N, chunks, features, time)
+            mean_attr = fold_class_attrs.mean(axis=(0, 3))  # (chunks, features)
+            mean_attr_per_feature = mean_attr.mean(axis=0)  # (features,)
+            class_attrs_all_folds.append(mean_attr_per_feature)
+        # Media sobre folds
+        class_attrs_mean = np.mean(class_attrs_all_folds, axis=0)
+        axs_imp[target_class].bar(selected_features, class_attrs_mean)
+        axs_imp[target_class].set_xlabel('Features')
+        axs_imp[target_class].set_ylabel('Mean Attribution')
+        axs_imp[target_class].set_title(f'Feature Importance - Class {target_class}')
+        axs_imp[target_class].grid(True)
+        axs_imp[target_class].tick_params(axis='x', rotation=45)
+    plt.tight_layout()
+    feat_imp_save_path = os.path.join(output_dir,
+                                      f'PMTL_sc{split_code}_mv1_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_cw{cw_type}_feature_importance_all_classes.png')
+    plt.savefig(feat_imp_save_path)
+    plt.close(fig_imp)
+
+    print(f"Saved in:\n{grad_save_path}\n{feat_imp_save_path}")
+
+
+def eval_conv_layers(preloaded_data, feats_code, tp, bin_size, split_code, cw_type, output_dir, max_samples_per_class=3):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    fs = 32
+    selected_features = preloaded_data[0]['selected_features']
+    target_classes = [0, 1, 2]
+
+    # Creación del directorio de salida
+    os.makedirs(output_dir, exist_ok=True)
+
+    for fold_data in preloaded_data:
+        fold_idx = fold_data['fold_idx']
+        model = fold_data['model'].to(device)
+        test_loader = fold_data['test_loader']
+        EEG_channels = len(selected_features)
+        model.eval()
+
+        # Almacenar activaciones de la primera capa conv y segunda capa conv (F2)
+        class_activations_conv1 = {cls: [] for cls in target_classes}
+        class_activations_conv2 = {cls: [] for cls in target_classes}
+
+        with torch.no_grad():
+            for inputs, labels in test_loader:
+                for input_single, label_single in zip(inputs, labels):
+                    label_single = label_single.item()
+                    if len(class_activations_conv1[label_single]) >= max_samples_per_class:
+                        continue
+
+                    input_single = input_single.unsqueeze(0).to(device)  # shape (1, C, Chunks, T)
+                    if input_single.size(1) != 1:
+                        input_single = input_single.permute(0, 2, 1, 3).reshape(1, 1, EEG_channels, -1)
+
+                    # Conv1 activations
+                    conv1_output = model.eegnet.block1[0](input_single)
+                    class_activations_conv1[label_single].append(conv1_output.squeeze(0).cpu().numpy())
+
+                    # Conv2 activations (F2)
+                    conv2_input = conv1_output
+                    conv2_output = model.eegnet.block2[0](conv2_input)
+                    class_activations_conv2[label_single].append(conv2_output.squeeze(0).cpu().numpy())
+
+                # Verifica si se alcanzó el límite de muestras por clase
+                if all(len(class_activations_conv1[cls]) >= max_samples_per_class for cls in target_classes):
+                    break
+
+        # Guardar figuras por clase para la capa Conv1
+        for cls in target_classes:
+            samples = class_activations_conv1[cls]
+            if not samples:
+                continue
+            num_filters = samples[0].shape[0]
+            fig, axs = plt.subplots(len(samples), num_filters, figsize=(3*num_filters, 2.5*len(samples)), squeeze=False)
+            for i, sample in enumerate(samples):
+                for j in range(num_filters):
+                    activation = sample[j]
+                    xtick_positions = np.linspace(0, activation.shape[1] - 1, 5)
+                    xtick_labels = np.round(xtick_positions / fs).astype(int)
+                    axs[i, j].imshow(activation, aspect='auto', cmap='viridis')
+                    axs[i, j].set_xticks(xtick_positions)
+                    axs[i, j].set_xticklabels(xtick_labels)
+                    axs[i, j].set_xlabel("Time (s)")
+                    axs[i, j].set_yticks(np.arange(len(selected_features)))
+                    axs[i, j].set_yticklabels(selected_features)
+                    axs[i, j].set_ylabel("Channel")
+                    if i == 0:
+                        axs[i, j].set_title(f'Conv1 Filter {j + 1}')
+
+            plt.suptitle(f'Conv1 Activations - Class {cls} - Fold {fold_idx}', fontsize=16)
+            plt.tight_layout(rect=[0, 0, 1, 0.96])
+            conv1_save_path = os.path.join(output_dir, f'conv1_class{cls}_fold{fold_idx}.png')
+            plt.savefig(conv1_save_path)
+            plt.close(fig)
+
+        # Guardar figuras por clase para la capa Conv2 (F2)
+        for cls in target_classes:
+            samples = class_activations_conv2[cls]
+            if not samples:
+                continue
+            num_filters = samples[0].shape[0]
+            fig, axs = plt.subplots(len(samples), num_filters, figsize=(3*num_filters, 2.5*len(samples)), squeeze=False)
+            for i, sample in enumerate(samples):
+                for j in range(num_filters):
+                    activation = sample[j]
+                    axs[i, j].imshow(activation, aspect='auto', cmap='viridis')
+                    axs[i, j].axis('off')
+                    if i == 0:
+                        axs[i, j].set_title(f'Conv2 Filter {j + 1}')
+            plt.suptitle(f'Conv2 Activations - Class {cls} - Fold {fold_idx}', fontsize=16)
+            plt.tight_layout(rect=[0, 0, 1, 0.96])
+            conv2_save_path = os.path.join(output_dir, f'conv2_class{cls}_fold{fold_idx}.png') ### tp{}_tf{}_!!!
+            plt.savefig(conv2_save_path)
+            plt.close(fig)
+
+    print("Conv visualizations saved.")
+
+
+
+def preload_folds_and_models(path_models, ds_path, feats_code, bin_size, tp, tf, split_code, cw_type, num_folds=5):
+    selected_features, EEG_channels = train.set_features(feats_code)
+    data_dict = data_utils.load_data_to_dict(ds_path, selected_features)
+    folds = train.generate_subject_kfolds(data_dict, k=num_folds)
+    lstm_hidden_dim, lstm_num_layers, num_classes = train.set_lstm()
+    num_sequences = tp // bin_size
+    eegnet_params = {'num_electrodes': EEG_channels, 'chunk_size': tp * 32 // num_sequences}
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    preloaded = []
+    for fold_idx, (train_uids, test_uids) in enumerate(folds):
+        _, _, test_dict, _ = train.get_partitions_from_fold(data_dict, train_uids, test_uids, split_code, seed=42)
+        test_data = data_utils.get_features_from_dict(test_dict, bin_size, 32)
+        test_loader = train.create_dataloader(
+            data_utils.AggressiveBehaviorDataset, test_data, tp, tf, bin_size, batch_size=32, shuffle=False
+        )
+        model_path = f"{path_models}PMTL_sc{split_code}_mv1_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_cw{cw_type}_fold{fold_idx}_model.pth"
+        model = models.EEGNetLSTM(eegnet_params, lstm_hidden_dim, lstm_num_layers, num_classes).to(device)
+        model.load_state_dict(torch.load(model_path, map_location=device), strict=True)
+        model.train()
+        preloaded.append({
+            'fold_idx': fold_idx,
+            'model': model,
+            'test_loader': test_loader,
+            'selected_features': selected_features
+        })
+    return preloaded
+
+
+def evaluate_model_all():
+    models_base_path = "./models/"
+    ds_path = "./dataset_resampled/dataset_32Hz.csv"
+    feats_code = 0
+    bin_size = 15
+    tp, tf = 300, 300
+    split_code = 1
+    cw_type = 1
+    output_dir = './results_analysis/'
+
+    # Precarga los datos y modelos (una sola vez)
+    preloaded_data = preload_folds_and_models(
+        models_base_path, ds_path, feats_code, bin_size, tp, tf, split_code, cw_type, num_folds=5
+    )
+
+    # Evalúa gradientes y características usando datos precargados
+    eval_features_and_gradients(
+        preloaded_data, feats_code, bin_size, tp, tf, split_code, cw_type, output_dir
+    )
+
+    # Capas convolucionales
+    eval_conv_layers(
+        preloaded_data, feats_code, tp, bin_size, split_code, tp, tf, cw_type, output_dir
+    )
+
 
 def run_full_evaluation_analysis(path_models, model_version, feats_code, tf, tp, bin_size, split_code,
                                  cw_type, seed=1):
-    output_path = "./results_analysis"  # TO-DO: args
+    output_path = results_analysis_path # TO-DO: args
     os.makedirs(output_path, exist_ok=True)
-    config_name = f"PM_sc{split_code}_mv{model_version}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_cw{cw_type}"
+    config_name = f"PMTL_sc{split_code}_mv{model_version}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_cw{cw_type}"
     print(f"evaluación completa para {config_name}")
     all_true, all_pred, all_probs, all_times = test_model_collect_predictions(
         path_models, model_version, feats_code, tf, tp, bin_size, split_code, cw_type, seed
     )
 
     thresholds = [
-        np.array([0.5, 0.5, 0.5]),  # base
-        np.array([0.1, 0.3, 0.35]) # TO-DO... arreglar lógica, actualmente male...
+        np.array([0.5, 0.5, 0.5]) #,  # base
+        # np.array([0.5, 0.7, 0.7]) # TO-DO... arreglar lógica, actualmente male...
     ]
     plot_confusion_matrices_thresholds(all_true, all_probs, thresholds, output_path, config_name)
     plot_roc_pr_curves(all_true, all_probs, output_path, config_name)
@@ -190,12 +417,15 @@ def run_full_evaluation_analysis(path_models, model_version, feats_code, tf, tp,
                              save_path=f"{output_path}/f1_vs_threshold_class1_{config_name}.png")
     plot_all_class_metrics_vs_threshold(y_true_all, y_probs_all, metric='f1', save_path=output_path,
                                         config_name=config_name)
+    ### eval features, covs and grads
+
+
     print(f"resultados en: {output_path}")
 
 
 
 
-def get_best_performing_models_prev(results_folder, f1_threshold_csv, output_csv="summary_best_models.csv"):
+def get_best_performing_models_prev(results_folder, f1_threshold_csv, output_csv=results_analysis_path+"summary_best_models.csv"):
     if not os.path.exists(f1_threshold_csv):
         raise FileNotFoundError(f"Archivo no encontrado: {f1_threshold_csv}")
     print(f"Analizando resultados en: {results_folder}")
@@ -256,7 +486,7 @@ def get_best_performing_models_prev(results_folder, f1_threshold_csv, output_csv
     print(f"Resumen de mejores modelos guardado en: {output_csv}")
 
 
-def get_best_performing_models(results_folder, f1_threshold_csv, output_csv="summary_best_models.csv"):
+def get_best_performing_models(results_folder, f1_threshold_csv, output_csv=results_analysis_path+"summary_best_models.csv"):
     result_files = [
         os.path.join(results_folder, f) for f in os.listdir(results_folder)
         if f.endswith("_experiments_results_5cv.csv")
@@ -355,7 +585,7 @@ def test_model_collect_predictions(path_models, model_version, feats_code, tf, t
         eegnet_params = {'num_electrodes': EEG_channels, 'chunk_size': tp * freq // num_sequences}
         model = model_fun(eegnet_params, lstm_hidden_dim, lstm_num_layers, num_classes).to(device)
 
-        model_path = f"{path_models}PM_sc{split_code}_mv{model_version}_f{feats_code}_tf{tf}" + \
+        model_path = f"{path_models}PMTL_sc{split_code}_mv{model_version}_f{feats_code}_tf{tf}" + \
                      f"_tp{tp}_bs{bin_size}_cw{cw_type}_fold{fold_idx}_model.pth"
         if not os.path.exists(model_path):
             print(f"Warning!: falta modelo {model_path}. Se omite fold {fold_idx}.")
@@ -640,7 +870,7 @@ def run_binary_calm_vs_aggressive_analysis(path_models, model_version, feats_cod
     # Evaluación binaria: Calm (0) vs Agression (1: Pre-episode + Aggression).
     output_path = "./results_analysis"
     os.makedirs(output_path, exist_ok=True)
-    config_name = f"PM_sc{split_code}_mv{model_version}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_cw{cw_type}"
+    config_name = f"PMTL_sc{split_code}_mv{model_version}_f{feats_code}_tf{tf}_tp{tp}_bs{bin_size}_cw{cw_type}"
     all_true, _, all_probs, _ = test_model_collect_predictions(
         path_models, model_version, feats_code, tf, tp, bin_size, split_code, cw_type, seed
     )
@@ -656,6 +886,289 @@ def run_binary_calm_vs_aggressive_analysis(path_models, model_version, feats_cod
         save_path=f"{output_path}/roc_curve_binary_{config_name}.png"
     )
     print(f"Done! AUC: {auc_score:.4f}")
+
+
+def custom_predict_with_threshold(logits, threshold=0.6):
+    probs = torch.softmax(logits, dim=1)  # (batch_size, num_classes)
+    predictions = []
+    for sample_probs in probs:
+        pre_attack_prob = sample_probs[PRE_ATTACK].item()
+        if pre_attack_prob >= threshold:
+            predictions.append(PRE_ATTACK)
+        else:
+            calm_attack_probs = [sample_probs[CALM].item(), sample_probs[ATTACK].item()]
+            other_class = CALM if calm_attack_probs[0] > calm_attack_probs[1] else ATTACK
+            predictions.append(other_class)
+    return predictions
+
+
+def evaluate_f1_score_model(model, dataloader, device, threshold_pre_attack=0.6):
+    model.eval()
+    all_preds = []
+    all_labels = []
+    with torch.no_grad():
+        for batch_features, batch_labels in dataloader:
+            batch_features = batch_features.to(device)
+            batch_labels = batch_labels.to(device)
+            logits = model(batch_features)
+            probs = torch.softmax(logits, dim=1)  # shape: (batch_size, num_classes)
+            for sample_probs in probs:
+                pre_prob = sample_probs[PRE_ATTACK].item()
+                if pre_prob >= threshold_pre_attack:
+                    pred = PRE_ATTACK
+                else:
+                    calm_prob = sample_probs[CALM].item()
+                    attack_prob = sample_probs[ATTACK].item()
+                    pred = CALM if calm_prob > attack_prob else ATTACK
+                all_preds.append(pred)
+            all_labels.extend(batch_labels.cpu().numpy())
+    return f1_score(all_labels, all_preds, average='macro')
+
+
+def test_model_collect_predictions_with_threshold(
+    path_models, model_version, feats_code, tf, tp, bin_size,
+    split_code, cw_type, seed=1, threshold_pre_attack=0.6
+):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    freq = 32
+    batch_size = 128
+    ds_path = f'./dataset_resampled/dataset_{freq}Hz.csv'
+    model_fun, features_fun, dataloader_fun, _, _ = train.set_model(model_version)
+    selected_features, EEG_channels = train.set_features(feats_code)
+    data_dict = data_utils.load_data_to_dict(ds_path, selected_features)
+    folds = train.generate_subject_kfolds(data_dict, k=5)
+    print('Testing folds...')
+    all_true, all_pred, all_probs, all_times = [], [], [], []
+    for fold_idx, (train_uids, test_uids) in enumerate(folds):
+        print(f"\nEvaluando Fold {fold_idx + 1} -------------------------")
+        _, _, test_dict, _ = train.get_partitions_from_fold(data_dict, train_uids, test_uids, split_code, seed)
+        test_data = features_fun(test_dict, bin_size, freq)
+        test_loader = train.create_dataloader(dataloader_fun, test_data, tp, tf, bin_size,
+                                              batch_size=batch_size, shuffle=False)
+        test_loader.dataset.return_onset = True
+        lstm_hidden_dim, lstm_num_layers, num_classes = train.set_lstm()
+        num_sequences = tp // bin_size
+        eegnet_params = {'num_electrodes': EEG_channels, 'chunk_size': tp * freq // num_sequences}
+        model = model_fun(eegnet_params, lstm_hidden_dim, lstm_num_layers, num_classes).to(device)
+        model_path = f"{path_models}PMTL_sc{split_code}_mv{model_version}_f{feats_code}_tf{tf}" + \
+                     f"_tp{tp}_bs{bin_size}_cw{cw_type}_fold{fold_idx}_model.pth"
+        if not os.path.exists(model_path):
+            print(f"Warning!: falta modelo {model_path}. Se omite fold {fold_idx}.")
+            continue
+        model.load_state_dict(torch.load(model_path, map_location=device))
+        model.eval()
+        fold_true, fold_pred, fold_probs, fold_onset = [], [], [], []
+        with torch.no_grad():
+            for i, batch in enumerate(test_loader):
+                inputs, onsets, labels = batch
+                if labels.ndim > 1:
+                    labels = torch.argmax(labels, dim=1)
+                inputs = inputs.to(device)
+                outputs = model(inputs)
+                probs = torch.softmax(outputs, dim=1).cpu().numpy()
+                for prob_vec in probs:
+                    pre_prob = prob_vec[PRE_ATTACK]
+                    if pre_prob >= threshold_pre_attack:
+                        pred = PRE_ATTACK
+                    else:
+                        pred = CALM if prob_vec[CALM] > prob_vec[ATTACK] else ATTACK
+                    fold_pred.append(pred)
+                    fold_probs.append(prob_vec)
+                fold_true.extend(labels.numpy())
+                fold_onset.extend(onsets.numpy())
+        all_true.append(np.array(fold_true))
+        all_pred.append(np.array(fold_pred))
+        all_probs.append(np.array(fold_probs))
+        all_times.append(np.array(fold_onset))
+    return all_true, all_pred, all_probs, all_times
+
+
+
+
+def evaluate_and_plot_confusion_matrices(
+    path_models, model_version, feats_code, tf, tp, bin_size,
+    split_code, cw_type, output_dir=results_analysis_path, threshold_active=0.5, seed=1
+):
+
+    # Constantes
+    freq = 32
+    batch_size = 128
+    class_names = ["Calm", "Pre-attack", "Attack"]
+    CALM, PRE_ATTACK, ATTACK = 0, 1, 2
+
+    # Cargar datos y preparar entorno
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ds_path = f'./dataset_resampled/dataset_{freq}Hz.csv'
+    model_fun, features_fun, dataloader_fun, _, _ = train.set_model(model_version)
+    selected_features, EEG_channels = train.set_features(feats_code)
+    data_dict = data_utils.load_data_to_dict(ds_path, selected_features)
+    folds = train.generate_subject_kfolds(data_dict, k=5)
+
+    all_true, all_pred = [], []
+    print('Testing folds...')
+
+    for fold_idx, (train_uids, test_uids) in enumerate(folds):
+        print(f"\nEvaluando Fold {fold_idx + 1} -------------------------")
+        _, _, test_dict, _ = train.get_partitions_from_fold(data_dict, train_uids, test_uids, split_code, seed)
+        test_data = features_fun(test_dict, bin_size, freq)
+        test_loader = train.create_dataloader(dataloader_fun, test_data, tp, tf, bin_size, batch_size=batch_size, shuffle=False)
+        test_loader.dataset.return_onset = True
+
+        lstm_hidden_dim, lstm_num_layers, num_classes = train.set_lstm()
+        num_sequences = tp // bin_size
+        eegnet_params = {'num_electrodes': EEG_channels, 'chunk_size': tp * freq // num_sequences}
+        model = model_fun(eegnet_params, lstm_hidden_dim, lstm_num_layers, num_classes).to(device)
+
+        model_path = f"{path_models}PMTL_sc{split_code}_mv{model_version}_f{feats_code}_tf{tf}" + \
+                     f"_tp{tp}_bs{bin_size}_cw{cw_type}_fold{fold_idx}_model.pth"
+        if not os.path.exists(model_path):
+            print(f"Warning!: falta modelo {model_path}. Se omite fold {fold_idx}.")
+            continue
+
+        model.load_state_dict(torch.load(model_path, map_location=device))
+        model.eval()
+
+        fold_true, fold_pred = [], []
+        with torch.no_grad():
+            for batch in test_loader:
+                inputs, onsets, labels = batch
+                if labels.ndim > 1:
+                    labels = torch.argmax(labels, dim=1)
+                inputs = inputs.to(device)
+                outputs = model(inputs)
+                probs = torch.softmax(outputs, dim=1).cpu().numpy()
+
+                for prob_vec in probs:
+                    pre_prob = prob_vec[PRE_ATTACK]
+                    att_prob = prob_vec[ATTACK]
+
+                    if pre_prob >= threshold_active or att_prob >= threshold_active:
+                        pred = np.argmax([prob_vec[CALM], pre_prob, att_prob])
+                    else:
+                        pred = CALM
+                    fold_pred.append(pred)
+
+                fold_true.extend(labels.numpy())
+
+        all_true.append(np.array(fold_true))
+        all_pred.append(np.array(fold_pred))
+
+    # Calcular matrices de confusión por fold
+    conf_matrices = [
+        confusion_matrix(true, pred, labels=range(len(class_names)))
+        for true, pred in zip(all_true, all_pred)
+    ]
+
+    os.makedirs(output_dir, exist_ok=True)
+    fig1_path = f"{output_dir}PMTL_sc{split_code}_mv{model_version}_f{feats_code}_tf{tf}" + \
+                 f"_tp{tp}_bs{bin_size}_cw{cw_type}_confM1.png"
+    # === FIGURA 1: 5 subfiguras (una por fold) ===
+    fig1, axs1 = plt.subplots(1, 5, figsize=(22, 4))
+    for i, cm in enumerate(conf_matrices):
+        sns.heatmap(cm, annot=True, fmt="d", ax=axs1[i], cmap="Blues",
+                    cbar=False, xticklabels=class_names, yticklabels=class_names)
+        axs1[i].set_title(f'Fold {i+1}')
+        axs1[i].set_xlabel('Predicted')
+        axs1[i].set_ylabel('True')
+    fig1.tight_layout()
+    fig1.savefig(fig1_path)
+    plt.close(fig1)
+
+    # === FIGURA 2: suma y media de las matrices ===
+    cm_sum = np.sum(conf_matrices, axis=0)
+    cm_mean = np.mean(conf_matrices, axis=0)
+
+    fig2, axs2 = plt.subplots(1, 2, figsize=(12, 5))
+    sns.heatmap(cm_sum, annot=True, fmt="d", ax=axs2[0], cmap="Blues",
+                xticklabels=class_names, yticklabels=class_names)
+    axs2[0].set_title('Sum of Confusion Matrices')
+    axs2[0].set_xlabel('Predicted')
+    axs2[0].set_ylabel('True')
+
+    sns.heatmap(cm_mean, annot=True, fmt=".1f", ax=axs2[1], cmap="Blues",
+                xticklabels=class_names, yticklabels=class_names)
+    axs2[1].set_title('Mean of Confusion Matrices')
+    axs2[1].set_xlabel('Predicted')
+    axs2[1].set_ylabel('True')
+
+    fig2.tight_layout()
+    fig2_path = f"{output_dir}PMTL_sc{split_code}_mv{model_version}_f{feats_code}_tf{tf}" + \
+                f"_tp{tp}_bs{bin_size}_cw{cw_type}_confM2.png"
+    fig2.savefig(fig2_path)
+    plt.close(fig2)
+
+    print(f"Figuras guardadas en: {fig1_path} y {fig2_path}")
+
+
+
+def plot_max_activation_regions(preloaded_data, feats_code, tp, bin_size, output_dir, max_samples_per_class=5):
+    """
+    Visualiza las regiones de activación máxima por clase y canal en la primera capa convolucional.
+    - preloaded_data: dict con datos precargados, modelos y dataloaders por fold.
+    - feats_code: índice de características usadas.
+    - tp: tiempo de pasado en segundos.
+    - bin_size: tamaño del bin para chunks temporales.
+    - output_dir: directorio donde guardar las figuras.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    fs = 32  # frecuencia de muestreo
+    time_ticks = np.linspace(0, tp, tp // bin_size + 1)
+
+    # Acumular activaciones por clase y canal
+    class_channel_max_map = {}  # {clase: [list of (channel x time)]}
+    for fold_idx, fold_data in enumerate(preloaded_data):
+        model = fold_data['model']
+        test_loader = fold_data['test_loader']
+        selected_features = fold_data['selected_features']
+        EEG_channels = len(selected_features)
+
+        model.eval()
+        device = next(model.parameters()).device
+
+        activations_per_class = {0: [], 1: [], 2: []}
+
+        with torch.no_grad():
+            for inputs, labels in test_loader:
+                label = labels.item()
+                if label not in activations_per_class:
+                    continue
+                if len(activations_per_class[label]) >= max_samples_per_class:
+                    continue
+
+                inputs = inputs.to(device)
+                if inputs.dim() == 4 and inputs.size(1) != 1:
+                    inputs = inputs.permute(0, 2, 1, 3)
+                    inputs = inputs.reshape(inputs.shape[0], 1, EEG_channels, -1)
+
+                conv_output = model.eegnet.block1[0](inputs)
+                act = conv_output.squeeze(0).cpu().numpy()  # (F1, C, T)
+                activations_per_class[label].append(act)
+
+        for cls, samples in activations_per_class.items():
+            if cls not in class_channel_max_map:
+                class_channel_max_map[cls] = []
+
+            for sample in samples:
+                max_act = sample.max(axis=0)  # (C, T): máximo entre filtros
+                class_channel_max_map[cls].append(max_act)
+
+    # Promediar y visualizar por clase
+    for cls, maps in class_channel_max_map.items():
+        maps = np.array(maps)  # (N, C, T)
+        mean_map = maps.mean(axis=0)  # (C, T)
+        plt.figure(figsize=(10, 6))
+        sns.heatmap(mean_map, cmap="viridis", xticklabels=round(mean_map.shape[1] / 10), yticklabels=fold_data['selected_features'])
+        plt.title(f"Zonas de Máxima Activación Promedio - Clase {cls}")
+        plt.xlabel("Tiempo")
+        plt.ylabel("Canales")
+        plt.tight_layout()
+        save_path = os.path.join(output_dir, f"max_activation_regions_class{cls}.png")
+        plt.savefig(save_path)
+        plt.close()
+
+    return True
+
+
 
 
 '''
