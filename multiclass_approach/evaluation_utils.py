@@ -155,3 +155,5 @@ def model_evaluation(model, dataloader, device):
     acc = round(acc, 4)
     f1_per_class = f1_per_class
     return f1_macro, f1_weighted, auc_macro, acc, f1_per_class
+
+

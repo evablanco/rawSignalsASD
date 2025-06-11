@@ -92,7 +92,6 @@ def compute_normalization_stats(train_dict, bin_size=15, freq=32):
     return mean, std
 
 
-
 def get_features_from_dict(data_dict, bin_size=15, freq=32, mean=None, std=None):
     # Calculate the size of one observation bin and the prediction window in terms of datapoints
     win_size = bin_size * freq  # Observation bin size in number of datapoints

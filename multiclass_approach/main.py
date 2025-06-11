@@ -35,10 +35,11 @@ if __name__ == '__main__':
     #path_models = args.outputdirmodels
     #path_data = args.datadir
     data_path = './dataset/'
+    root_exps = './normalized_sigs/'  # './normalized_sigs/
     data_path_resampled = './dataset_resampled/'
-    results_path = './normalized_sigs/results/'
-    results_analysis_path = './normalized_sigs/results_analysis/'
-    models_path = './normalized_sigs/models/'
+    results_path = root_exps + 'results/'
+    results_analysis_path = root_exps + 'results_analysis/'
+    models_path = root_exps + 'models/'
     freq = 32
 
     ###os.makedirs(results_path, exist_ok=True)
