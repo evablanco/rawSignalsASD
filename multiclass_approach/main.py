@@ -35,7 +35,7 @@ if __name__ == '__main__':
     #path_models = args.outputdirmodels
     #path_data = args.datadir
     data_path = './dataset/'
-    root_exps = './normalized_sigs/'  # './normalized_sigs/
+    root_exps = './normalized_sigs_smooth/rolling_avg/'  # './normalized_sigs/
     data_path_resampled = './dataset_resampled/'
     results_path = root_exps + 'results/'
     results_analysis_path = root_exps + 'results_analysis/'

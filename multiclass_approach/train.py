@@ -569,7 +569,7 @@ def get_partitions_from_fold(data_dict, train_uids, test_uids, split_code, seed)
 
 
 
-def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, cw_type, seed=1):
+def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, cw_type, seed=1, smooth=False):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -580,6 +580,12 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
     print(f'tp: {tp}, tf: {tf}, bin_size: {bin_size}, model_code: {model_code}, split_code: {split_code}, cw_type: {cw_type}.')
     ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
     data_dict = data_utils.load_data_to_dict(ds_path, selected_features)
+    _ = data_utils.analyze_extremes_distribution(data_dict, path_results+'./all_data_')
+    smooth = True
+    if smooth:
+        print('Dealing with outliers... rolling avg. (win_size=5)')
+        data_dict = data_utils.deal_with_outliers(data_dict, selected_features, strategy=1)
+        _ = data_utils.analyze_extremes_distribution(data_dict, path_results+'./all_data_smooth_')
     # data_dict = dict(list(data_dict.items())[:20])
     # generate folds
     num_folds = 5
@@ -592,6 +598,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         # Obtener particiones de train, val y test en funcion de los ids del fold
         train_dict, val_dict, test_dict, all_train_dict = get_partitions_from_fold(data_dict, train_uids, test_uids,
                                                                                    split_code, seed)
+        ##check_feature_values = data_utils.analyze_extremes_distribution(all_train_dict, './train_')
         # Dividir las sesiones de cada usuario en bin_size segundos y almacenar raw signals y etiquetas
         # (variable binaria que indica la ocurrencia de un episodio agresivo en el bin)
         mean, std = data_utils.compute_normalization_stats(all_train_dict, bin_size, freq)
@@ -599,6 +606,7 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         train_data = features_fun(train_dict, bin_size, freq, mean, std)
         val_data = features_fun(val_dict, bin_size, freq, mean, std)
         test_data = features_fun(test_dict, bin_size, freq, mean, std)
+        _ = data_utils.analyze_extremes_distribution(all_train_dict, path_results+'train_norm_', mean, std, selected_features)
 
         batch_size = 128
         dataloader = create_dataloader(dataloader_fun, train_data, tp, tf, bin_size, batch_size, shuffle=True)

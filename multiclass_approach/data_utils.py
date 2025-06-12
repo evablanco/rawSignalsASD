@@ -1,10 +1,11 @@
 import pandas as pd
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import Counter
-import random
+import seaborn as sns
+from collections import defaultdict
 
 
 CALM, PRE_ATTACK, ATTACK = 0, 1, 2
@@ -26,6 +27,104 @@ def load_data_to_dict(path, selected_columns=None):
             data_dict[subject_id] = {}
         data_dict[subject_id][session_id] = group_df[final_columns]
     return data_dict
+
+
+def analyze_extremes_distribution_prev(data_dict, output_dir='./'):
+    feature_extremes = defaultdict(list)
+    # Iterate through each subject and session
+    for subject_data in data_dict.values():
+        for session_df in subject_data.values():
+            for feature in session_df.columns[:-1]:  # exclude 'Condition'
+                feature_series = session_df[feature]
+                feature_extremes[feature].extend(feature_series.tolist())
+    # Plot histograms for each feature
+    plt.figure(figsize=(20, 10))
+    for i, (feature, values) in enumerate(feature_extremes.items(), 1):
+        plt.subplot(2, 3, i)
+        sns.histplot(values, bins=100, kde=True)
+        plt.title(f'Distribution of {feature}')
+        plt.xlabel('Value')
+        plt.ylabel('Frequency')
+    plt.tight_layout()
+    save_path = output_dir + 'features_max_min_distribution.png'
+    plt.savefig(save_path)
+    #plt.show()
+    print('Distribution saved in ', save_path, '.')
+    return feature_extremes
+
+
+def analyze_extremes_distribution(
+    data_dict,
+    output_dir='./',
+    means=None,
+    stds=None,
+    selected_columns=None  # e.g., ['EDA', 'ACC_X', 'ACC_Y', 'ACC_Z', 'BVP']
+):
+    feature_extremes = defaultdict(list)
+
+    # Build mapping from feature name to mean/std if provided
+    if means is not None and stds is not None and selected_columns is not None:
+        mean_dict = {feat: mu for feat, mu in zip(selected_columns, means)}
+        std_dict = {feat: sigma for feat, sigma in zip(selected_columns, stds)}
+    else:
+        mean_dict = {}
+        std_dict = {}
+
+    # Iterate through each subject and session
+    for subject_data in data_dict.values():
+        for session_df in subject_data.values():
+            for feature in session_df.columns[:-1]:  # exclude 'Condition'
+                feature_series = session_df[feature]
+
+                # Apply normalization if possible
+                if feature in mean_dict and feature in std_dict:
+                    mu = mean_dict[feature]
+                    sigma = std_dict[feature]
+                    if sigma != 0:
+                        feature_series = (feature_series - mu) / sigma
+                    else:
+                        print(f"Warning: std is 0 for feature {feature}. Skipping normalization.")
+
+                feature_extremes[feature].extend(feature_series.tolist())
+
+    # Plot histograms
+    plt.figure(figsize=(20, 10))
+    for i, (feature, values) in enumerate(feature_extremes.items(), 1):
+        plt.subplot(2, 3, i)
+        sns.histplot(values, bins=100, kde=True)
+        plt.title(f'Distribution of {feature}')
+        plt.xlabel('Value')
+        plt.ylabel('Frequency')
+
+    plt.tight_layout()
+    save_path = output_dir + 'features_max_min_distribution.png'
+    plt.savefig(save_path)
+    print('Distribution saved in:', save_path)
+    return feature_extremes
+
+
+def apply_rolling_average(data_dict, selected_columns=None, window_size=5):
+    if selected_columns is None:
+        selected_columns = ['EDA', 'ACC_X', 'ACC_Y', 'ACC_Z', 'BVP']
+    new_data_dict = {}
+    for subject_id in data_dict:
+        new_data_dict[subject_id] = {}
+        for session_id, df in data_dict[subject_id].items():
+            smoothed_df = df.copy()
+            for col in selected_columns:
+                smoothed_df[col] = smoothed_df[col].rolling(window=window_size, min_periods=1, center=True).mean()
+            new_data_dict[subject_id][session_id] = smoothed_df
+    return new_data_dict
+
+
+def deal_with_outliers(data_dict, selected_columns=None, strategy=0):
+    if strategy == 0:
+        return data_dict
+    elif strategy == 1: # rolling avg
+        return apply_rolling_average(data_dict, selected_columns=selected_columns)
+    else:
+        print('Strategy not implemented yet...')
+        return data_dict
 
 
 def split_data_full_sessions(data_dict, train_ratio=0.8):
