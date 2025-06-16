@@ -46,7 +46,7 @@ def analyze_extremes_distribution_prev(data_dict, output_dir='./'):
         plt.xlabel('Value')
         plt.ylabel('Frequency')
     plt.tight_layout()
-    save_path = output_dir + 'features_max_min_distribution.png'
+    save_path = output_dir + 'feature_values_distribution.png'
     plt.savefig(save_path)
     #plt.show()
     print('Distribution saved in ', save_path, '.')
@@ -97,13 +97,63 @@ def analyze_extremes_distribution(
         plt.ylabel('Frequency')
 
     plt.tight_layout()
-    save_path = output_dir + 'features_max_min_distribution.png'
+    save_path = output_dir + 'feature_value_distribution.png'
     plt.savefig(save_path)
     print('Distribution saved in:', save_path)
     return feature_extremes
 
 
+def count_out_of_range_values(data_dict, acc_limit_g=8.0, eda_range=(0.01, 100), bvp_limit=3000, output_dir='./'):
+    """
+    Counts how many values are outside the valid physical ranges for each sensor.
+
+    Parameters:
+    - data_dict: data dictionary {subject: {session: DataFrame}}
+    - acc_limit_g: limit in g for the accelerometer (default ±8g)
+    - eda_range: tuple with valid range for EDA (default 0.01–100 µS)
+    - bvp_limit: absolute limit for BVP (default ±3000)
+
+    Returns:
+    - dictionary with the percentages of values outside the range per sensor.
+    """
+    acc_limit = acc_limit_g * 9.81  # convertir a m/s^2
+    stats = defaultdict(lambda: {'total': 0, 'outliers': 0})
+
+    for subject_data in data_dict.values():
+        for session_df in subject_data.values():
+            for feature in ['ACC_X', 'ACC_Y', 'ACC_Z']:
+                values = session_df[feature].values
+                stats[feature]['total'] += len(values)
+                stats[feature]['outliers'] += np.sum((values < -acc_limit) | (values > acc_limit))
+            eda_vals = session_df['EDA'].values
+            stats['EDA']['total'] += len(eda_vals)
+            stats['EDA']['outliers'] += np.sum((eda_vals < eda_range[0]) | (eda_vals > eda_range[1]))
+            bvp_vals = session_df['BVP'].values
+            stats['BVP']['total'] += len(bvp_vals)
+            stats['BVP']['outliers'] += np.sum(np.abs(bvp_vals) > bvp_limit)
+
+    labels = []
+    percentages = []
+    for sensor, d in stats.items():
+        percent = 100 * d['outliers'] / d['total'] if d['total'] > 0 else 0
+        labels.append(sensor)
+        percentages.append(percent)
+
+    plt.figure(figsize=(8, 5))
+    plt.bar(labels, percentages, color='tomato')
+    plt.ylabel('% values outside range')
+    plt.title('Proportion of values outside physical limits per sensor')
+    plt.ylim(0, max(5, max(percentages) + 1))
+    for i, val in enumerate(percentages):
+        plt.text(i, val + 0.3, f"{val:.2f}%", ha='center')
+    plt.tight_layout()
+    plt.savefig(output_dir+'outliers_distribution.png')
+    #plt.show()
+    return dict(stats)
+
+
 def apply_rolling_average(data_dict, selected_columns=None, window_size=5):
+    print('Dealing with outliers... rolling avg. (win_size=', window_size, '5)')
     if selected_columns is None:
         selected_columns = ['EDA', 'ACC_X', 'ACC_Y', 'ACC_Z', 'BVP']
     new_data_dict = {}
@@ -117,11 +167,107 @@ def apply_rolling_average(data_dict, selected_columns=None, window_size=5):
     return new_data_dict
 
 
+def apply_clipping(data_dict, clip_type='zscore', threshold=3, percs=(1, 99), fixed_bounds=None, selected_columns=None):
+    """
+    Apply clipping (floor & ceiling) to biosignal data per session and feature.
+
+    Parameters:
+    - data_dict: nested dict[subject][session] -> DataFrame
+    - clip_type: 'zscore', 'percentile', or 'fixed'
+    - threshold: z-score threshold if using 'zscore'
+    - percs: tuple of lower and upper percentiles for 'percentile' method
+    - fixed_bounds: dict with feature: (min, max) if using 'fixed'
+    - selected_columns: list of feature names to apply clipping to
+
+    Returns:
+    - clipped_data_dict: same structure with clipped values
+
+    Usage:
+    - clipped = apply_clipping(data_dict, clip_type='zscore', threshold=3)
+    - clipped = apply_clipping(data_dict, clip_type='percentile', percs=(1, 99))
+    - clipped = apply_clipping(data_dict, clip_type='fixed', fixed_bounds=bounds) (bounds = {'BVP': (-3000, 3000), 'EDA': (0, 50)})
+    fixed_bounds = {
+        'EDA': (0.01, 100),
+        'BVP': (-1000, 1000),   # conservador
+        'ACC_X': (-78.5, 78.5),
+        'ACC_Y': (-78.5, 78.5),
+        'ACC_Z': (-78.5, 78.5),
+    }
+    from:
+    ALTALEB, A. (2022). Machine Learning and Deep Learning approaches for stress detection using Empatica E4 bracelet.
+
+    """
+    print('Dealing with outliers... ', clip_type)
+    clipped_data_dict = {}
+    for subject_id in data_dict:
+        clipped_data_dict[subject_id] = {}
+        for session_id, df in data_dict[subject_id].items():
+            clipped_df = df.copy()
+            for col in selected_columns or df.columns.drop('Condition'):
+                values = clipped_df[col].values
+                if clip_type == 'zscore':
+                    mean, std = values.mean(), values.std() + 1e-8
+                    lower, upper = mean - threshold * std, mean + threshold * std
+                elif clip_type == 'percentile':
+                    lower, upper = np.percentile(values, percs)
+                elif clip_type == 'fixed':
+                    lower, upper = fixed_bounds.get(col, (-np.inf, np.inf))
+                else:
+                    raise ValueError("clip_type must be 'zscore', 'percentile', or 'fixed'")
+                clipped_df[col] = np.clip(values, lower, upper)
+            clipped_data_dict[subject_id][session_id] = clipped_df
+    return clipped_data_dict
+
+
+def preprocess_out_of_range_with_rolling(data_dict, window_size=5):
+    # Define physical plausible sensor ranges
+    # ALTALEB, A. (2022). Machine Learning and Deep Learning approaches for stress detection using Empatica E4 bracelet.
+    sensor_ranges = {
+        'EDA': (0.01, 100),            # in microsiemens (μS)
+        'ACC_X': (-78.48, 78.48),      # ±8g in m/s²
+        'ACC_Y': (-78.48, 78.48),
+        'ACC_Z': (-78.48, 78.48),
+        'BVP': (-3000, 3000)           # assuming plausible empirical range
+    }
+    print('Dealing with outliers... preprocess_out_of_range_with_rolling(...)')
+    print(f"params: sensor_ranges: EDA (0.01, 100), ACC_: (-78.48, 78.48), BVP: (-3000, 3000), win_size = {window_size}")
+    processed_data_dict = defaultdict(dict)
+    for subject_id, sessions in data_dict.items():
+        for session_id, df in sessions.items():
+            df_copy = df.copy()
+            for sensor, (min_val, max_val) in sensor_ranges.items():
+                if sensor in df_copy.columns:
+                    # Identify out-of-range indices
+                    outliers_mask = (df_copy[sensor] < min_val) | (df_copy[sensor] > max_val)
+                    # Replace with boundary values
+                    df_copy.loc[df_copy[sensor] < min_val, sensor] = min_val
+                    df_copy.loc[df_copy[sensor] > max_val, sensor] = max_val
+                    # Apply rolling average only to affected rows
+                    smoothed = df_copy[sensor].rolling(window=window_size, min_periods=1, center=True).mean()
+                    df_copy.loc[outliers_mask, sensor] = smoothed[outliers_mask]
+            processed_data_dict[subject_id][session_id] = df_copy
+    return processed_data_dict
+
+
+
 def deal_with_outliers(data_dict, selected_columns=None, strategy=0):
     if strategy == 0:
         return data_dict
     elif strategy == 1: # rolling avg
         return apply_rolling_average(data_dict, selected_columns=selected_columns)
+    elif strategy == 2:
+        return apply_clipping(data_dict, clip_type='percentile', percs=(1, 99))
+    elif strategy == 3:
+        fixed_bounds = {
+            'EDA': (0.01, 100),
+            'BVP': (-2000, 2000),  # conservador
+            'ACC_X': (-78.5, 78.5),
+            'ACC_Y': (-78.5, 78.5),
+            'ACC_Z': (-78.5, 78.5),
+        }
+        return apply_clipping(data_dict, clip_type='fixed', fixed_bounds=fixed_bounds)
+    elif strategy == 4:
+        return preprocess_out_of_range_with_rolling(data_dict, window_size=32)
     else:
         print('Strategy not implemented yet...')
         return data_dict

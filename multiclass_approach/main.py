@@ -15,7 +15,7 @@ if __name__ == '__main__':
     parser.add_argument("-test", type=bool, default=False, help="Analyse model results.")
     parser.add_argument("-v", "--model_version", type=int, default=1, help="Model version: 1")
     parser.add_argument("-f", "--feats_code", type=int, default=0, help="Features used: 0 all, 1-3 leave one out, 4-6 only one source.")
-    parser.add_argument("-tp", type=int, default=300, help="Number of seconds in the past (default is 60 = 1 min)")
+    parser.add_argument("-tp", type=int, default=180, help="Number of seconds in the past (default is 60 = 1 min)")
     parser.add_argument("-tf", type=int, default=300, help="Number of seconds in the future (default is 180 = 3 min)")
     parser.add_argument("-m", "--model", type=int, default=0,
                         help="model type (default is 0: PM. Use 1 for intra TL in PM, and 3 for PDM.")
@@ -25,6 +25,8 @@ if __name__ == '__main__':
     parser.add_argument("-sb", "--specific_behavior", type=int, default='0', help="Predict aggresive episode combined (0) or different aggresive episodes (1) (default=0)")
     parser.add_argument("-cw", "--class_weights_type", type=int, default='1',
                         help="0 no class weights, 1 balanced, 2 custom")
+    parser.add_argument("-smooth", type=bool, default=True, help="Preprocess data.")
+    parser.add_argument("-st", type=int, default=4, help="Smooth strategy: default 4, clipping and rolling avg. Only is smooth == True")
     args = parser.parse_args()
     print(args)
 
@@ -35,7 +37,7 @@ if __name__ == '__main__':
     #path_models = args.outputdirmodels
     #path_data = args.datadir
     data_path = './dataset/'
-    root_exps = './normalized_sigs_smooth/rolling_avg/'  # './normalized_sigs/
+    root_exps = './normalized_sigs_smooth/clip_rolling_avg/'  # './normalized_sigs/ cambiar también en test...
     data_path_resampled = './dataset_resampled/'
     results_path = root_exps + 'results/'
     results_analysis_path = root_exps + 'results_analysis/'
@@ -88,6 +90,15 @@ if __name__ == '__main__':
     # 1: PM-SS
     ##########
 
+    #########
+    smooth = args.smooth
+    smooth_strategy = args.st
+    # 0: None
+    # 1: Rolling avg.
+    # 2: Clipping by percentile
+    # 3: Clipping by E4 sensor values
+    # 4: Clipping by E4 sensor values + rolling avg.
+    ##########
 
     if args.test:
         print('Start testing')
@@ -117,13 +128,13 @@ if __name__ == '__main__':
         if class_type == 0:
             if args.model == 0:
                 print('Exps PM:')
-                train.start_exps_PM(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type)
+                train.start_exps_PM(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type, smooth=smooth, smooth_st=smooth_strategy)
             if args.model == 1:
                 print('Exps intra_TL:')
-                train.start_exps_PM_intraTL(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type)
+                train.start_exps_PM_intraTL(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type, smooth=smooth, smooth_st=smooth_strategy)
             if args.model == 3:
                 print('Exps PDM:')
-                train.start_exps_PDM(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type)
+                train.start_exps_PDM(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type, smooth=smooth, smooth_st=smooth_strategy)
             if args.model == 4:
                 print('Exps PM-LOO: #TO-DO!!! :)')
                 #train.start_exps_PM_v2(tp, tf, freq, data_path_resampled, results_path, models_path, model_version, feats_code, split_code, bin_size, cw_type)

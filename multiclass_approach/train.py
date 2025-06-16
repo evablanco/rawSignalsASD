@@ -569,7 +569,7 @@ def get_partitions_from_fold(data_dict, train_uids, test_uids, split_code, seed)
 
 
 
-def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, cw_type, seed=1, smooth=False):
+def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, cw_type, seed=1, smooth=False, smooth_st=4):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -580,12 +580,11 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
     print(f'tp: {tp}, tf: {tf}, bin_size: {bin_size}, model_code: {model_code}, split_code: {split_code}, cw_type: {cw_type}.')
     ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
     data_dict = data_utils.load_data_to_dict(ds_path, selected_features)
-    _ = data_utils.analyze_extremes_distribution(data_dict, path_results+'./all_data_')
-    smooth = True
+    _ = data_utils.analyze_extremes_distribution(data_dict, path_results+'all_data_')
     if smooth:
-        print('Dealing with outliers... rolling avg. (win_size=5)')
-        data_dict = data_utils.deal_with_outliers(data_dict, selected_features, strategy=1)
-        _ = data_utils.analyze_extremes_distribution(data_dict, path_results+'./all_data_smooth_')
+        #data_dict = data_utils.deal_with_outliers(data_dict, selected_features, strategy=1)
+        data_dict = data_utils.deal_with_outliers(data_dict, selected_features, strategy=smooth_st)
+        _ = data_utils.analyze_extremes_distribution(data_dict, path_results+'all_data_smooth_')
     # data_dict = dict(list(data_dict.items())[:20])
     # generate folds
     num_folds = 5
@@ -606,8 +605,8 @@ def start_exps_PM(tp, tf, freq, data_path_resampled, path_results, path_models, 
         train_data = features_fun(train_dict, bin_size, freq, mean, std)
         val_data = features_fun(val_dict, bin_size, freq, mean, std)
         test_data = features_fun(test_dict, bin_size, freq, mean, std)
-        _ = data_utils.analyze_extremes_distribution(all_train_dict, path_results+'train_norm_', mean, std, selected_features)
-
+        if fold_idx == 0:
+            _ = data_utils.analyze_extremes_distribution(all_train_dict, path_results+'train_norm_smooth_', mean, std, selected_features)
         batch_size = 128
         dataloader = create_dataloader(dataloader_fun, train_data, tp, tf, bin_size, batch_size, shuffle=True)
         dataloader_val = create_dataloader(dataloader_fun, val_data, tp, tf, bin_size, batch_size, shuffle=False)
@@ -694,7 +693,7 @@ def load_pretrained_eegnet_weights(model, pretrained_path):
 
 
 
-def start_exps_PM_intraTL(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, cw_type, seed=1):
+def start_exps_PM_intraTL(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code, b_size, cw_type, seed=1, smooth=False, smooth_st=4):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -706,6 +705,10 @@ def start_exps_PM_intraTL(tp, tf, freq, data_path_resampled, path_results, path_
     print(f'tp: {tp}, tf: {tf}, bin_size: {bin_size}, model_code: {model_code}, split_code: {split_code}, cw_type: {cw_type}.')
     ds_path = data_path_resampled + "dataset_" + str(freq) + "Hz.csv"
     data_dict = data_utils.load_data_to_dict(ds_path, selected_features)
+    if smooth:
+        #data_dict = data_utils.deal_with_outliers(data_dict, selected_features, strategy=1)
+        data_dict = data_utils.deal_with_outliers(data_dict, selected_features, strategy=smooth_st)
+        #_ = data_utils.analyze_extremes_distribution(data_dict, path_results+'all_data_smooth_')
     # data_dict = dict(list(data_dict.items())[:20])
     # generate folds
     num_folds = 5
@@ -844,7 +847,7 @@ def invalid_data_multiclass(dataloader, expected_classes=(0, 1, 2)):
 
 
 def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models, model_code, feats_code, split_code,
-                   b_size, cw_type, seed=1):
+                   b_size, cw_type, seed=1, smooth=False, smooth_st=4):
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -864,7 +867,9 @@ def start_exps_PDM(tp, tf, freq, data_path_resampled, path_results, path_models,
         key_subject = list(first_item.keys())[0]
         print('userID: ', key_subject)
         split_fun = get_split_fun_PDM(split_code)
-
+        if smooth:
+            first_item = data_utils.deal_with_outliers(first_item, selected_features, strategy=smooth_st)
+            _ = data_utils.analyze_extremes_distribution(first_item, path_results + 'all_data_smooth_' + key_subject + '_')
         train_data, _ = split_fun(first_item, train_ratio=0.8)
         mean, std = data_utils.compute_normalization_stats(train_data, bin_size, freq)
         #mean, std = None, None
